@@ -1,0 +1,25 @@
+cd ~/Desktop/barnComputeMVP
+PY="./.venv-test/bin/python"
+
+"$PY" -m pip install -e '.[dev]'
+"$PY" -m ruff check .
+"$PY" -m pytest -q --cov=barn_compute
+"$PY" -m build
+"$PY" -m twine check dist/*
+
+
+
+TEST_ROOT="$(mktemp -d)"
+
+./.venv-test/bin/barn coordinator init \
+  --name LabBarn \
+  --advertise 127.0.0.1 \
+  --state-dir "$TEST_ROOT/coordinator"
+
+./.venv-test/bin/barn coordinator ca export \
+  --output "$TEST_ROOT/barn-ca.pem" \
+  --state-dir "$TEST_ROOT/coordinator"
+
+./.venv-test/bin/barn coordinator invite \
+  --ttl 10m \
+  --state-dir "$TEST_ROOT/coordinator"
