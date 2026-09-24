@@ -6,8 +6,11 @@ Windows computer. One host runs the Barn coordinator and may also run a normal
 node agent. Each participating computer has its own durable node identity and
 managed file store.
 
-This repository is currently at the planning stage. The implementation and the
-cross-platform acceptance tests described below have **not** been completed.
+This repository is under active development. The package foundation, CLI
+surface, strict configuration and protocol models, Ed25519 request signing,
+durable nonce replay protection, initial tests, and Windows/macOS CI definition
+are implemented. Coordinator services, enrolment, managed-file transfer, relay
+operation, and cross-platform acceptance are **not yet complete**.
 
 ## M1 goal
 
