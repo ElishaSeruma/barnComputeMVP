@@ -32,3 +32,27 @@ endpoint session and therefore cannot read file content or issue Barn authority.
   platform exposes POSIX modes.
 - Configuration rejects unknown fields and unsupported transport modes.
 
+## Coordinator state layout
+
+Coordinator initialization is atomic: all files and the migrated database are
+created in a private sibling staging directory, then that directory is renamed
+into place. Existing state is never overwritten implicitly.
+
+```text
+coordinator/
+  coordinator.json
+  coordinator.db
+  ca-cert.pem
+  coordinator-cert.pem
+  secrets/
+    ca-key.pem
+    coordinator-key.pem
+    grant-key.pem
+    admin.token
+```
+
+The CA uses an Ed25519 key and a ten-year self-signed certificate. The
+coordinator uses a separate Ed25519 TLS key and a 90-day certificate whose SAN
+matches the configured IP address or DNS name. Transfer grants use a third,
+independent Ed25519 key. Invitation codes contain 192 random bits and only their
+SHA-256 digests are persisted.

@@ -1,21 +1,54 @@
+# Local Python environments
 .venv/
 .venv-*/
+venv/
+venv-*/
+
+# Python caches, test output, and tooling
 __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+.tox/
+.nox/
 build/
 dist/
 .mypy_cache/
 .ruff_cache/
+
+# Editors and operating-system metadata
 .idea/
 .vscode/
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+Desktop.ini
+
+# Local barnCompute state and secrets
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 *.pem
 *.key
+*.token
 .env
+.env.*
+!.env.example
+local-state/
+test-state/
 testpypi-artifacts/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*~

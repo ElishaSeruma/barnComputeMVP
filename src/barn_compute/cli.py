@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import timedelta
 from pathlib import Path
 
 import typer
@@ -11,15 +13,16 @@ from . import __version__
 from .config import (
     BarnConfig,
     default_config_path,
-    ensure_private_directory,
     load_config,
     save_config,
 )
+from .coordinator.service import CoordinatorService
 from .errors import BarnError, ErrorCode
 
 app = typer.Typer(help="Private authenticated device groups and secure file exchange.")
 config_app = typer.Typer(help="Manage local barnCompute configuration.")
 coordinator_app = typer.Typer(help="Create and administer a Barn coordinator.")
+coordinator_ca_app = typer.Typer(help="Export and inspect the Barn public CA.")
 node_app = typer.Typer(help="Create, enrol, and run a node agent.")
 file_app = typer.Typer(help="Import and list managed files.")
 share_app = typer.Typer(help="Create and fetch explicit file shares.")
@@ -28,6 +31,7 @@ relay_app = typer.Typer(help="Run and configure the optional relay service.")
 
 app.add_typer(config_app, name="config")
 app.add_typer(coordinator_app, name="coordinator")
+coordinator_app.add_typer(coordinator_ca_app, name="ca")
 app.add_typer(node_app, name="node")
 app.add_typer(file_app, name="file")
 app.add_typer(share_app, name="share")
@@ -58,6 +62,21 @@ def _pending_command(feature: str):
 
     command.__name__ = feature.replace(" ", "_")
     return command
+
+
+def _coordinator_service(state_dir: Path | None) -> CoordinatorService:
+    path = state_dir or load_config().state_dir / "coordinator"
+    return CoordinatorService(path)
+
+
+def _parse_duration(value: str) -> timedelta:
+    match = re.fullmatch(r"([1-9][0-9]*)([smh])", value.strip().lower())
+    if match is None:
+        raise BarnError(ErrorCode.INVALID_REQUEST, "Duration must look like 10m, 30s, or 1h")
+    amount = int(match.group(1))
+    unit = match.group(2)
+    seconds = amount * {"s": 1, "m": 60, "h": 3600}[unit]
+    return timedelta(seconds=seconds)
 
 
 @config_app.command("show")
@@ -94,15 +113,36 @@ def coordinator_init(
     advertise: str = typer.Option(..., "--advertise"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
 ) -> None:
-    del name, advertise
-    path = ensure_private_directory(state_dir or load_config().state_dir / "coordinator")
-    typer.echo(f"Coordinator state directory prepared at {path}")
-    typer.echo("Identity and CA creation are the next implementation stage.")
+    metadata = _coordinator_service(state_dir).initialize(name, advertise)
+    typer.echo(f"Barn ID: {metadata.barn_id}")
+    typer.echo(f"CA SHA-256: {metadata.ca_fingerprint}")
+    typer.echo("Coordinator initialized. Keep its state directory private and backed up.")
+
+
+@coordinator_ca_app.command("export")
+def coordinator_ca_export(
+    output: Path = typer.Option(..., "--output"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    fingerprint = _coordinator_service(state_dir).export_ca(output.expanduser().resolve())
+    typer.echo(f"Exported public Barn CA to {output}")
+    typer.echo(f"CA SHA-256: {fingerprint}")
+
+
+@coordinator_app.command("invite")
+def coordinator_invite(
+    ttl: str = typer.Option("10m", "--ttl"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    invite = _coordinator_service(state_dir).create_invite(_parse_duration(ttl))
+    typer.echo(f"Invite ID: {invite.invite_id}")
+    typer.echo(f"One-use code: {invite.code}")
+    typer.echo(f"Expires at: {invite.expires_at.isoformat()}")
+    typer.echo("Convey this code privately. It will not be displayed again.")
 
 
 for command_name, command_help in (
     ("start", "Start the coordinator services."),
-    ("invite", "Create a one-use enrolment invitation."),
     ("enrolments", "List pending enrolment requests."),
     ("approve", "Approve a pending enrolment request."),
 ):

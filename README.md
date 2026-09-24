@@ -8,9 +8,11 @@ managed file store.
 
 This repository is under active development. The package foundation, CLI
 surface, strict configuration and protocol models, Ed25519 request signing,
-durable nonce replay protection, initial tests, and Windows/macOS CI definition
-are implemented. Coordinator services, enrolment, managed-file transfer, relay
-operation, and cross-platform acceptance are **not yet complete**.
+durable nonce replay protection, Barn coordinator trust initialization, public
+CA export, hashed one-use invitations, initial tests, and Windows/macOS CI
+definition are implemented. Network services, node enrolment, managed-file
+transfer, relay operation, and cross-platform acceptance are **not yet
+complete**.
 
 ## M1 goal
 

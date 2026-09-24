@@ -39,13 +39,16 @@ def ensure_private_directory(path: Path) -> Path:
 
 
 def write_private_json(path: Path, payload: dict[str, Any]) -> None:
+    write_private_bytes(path, (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode())
+
+
+def write_private_bytes(path: Path, data: bytes) -> None:
     ensure_private_directory(path.parent)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    data = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     descriptor = os.open(temporary, flags, 0o600)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+        with os.fdopen(descriptor, "wb") as handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
@@ -70,4 +73,3 @@ def save_config(config: BarnConfig, path: Path | None = None) -> Path:
     config_path = path or default_config_path()
     write_private_json(config_path, config.model_dump(mode="json"))
     return config_path
-
