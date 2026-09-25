@@ -9,9 +9,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
-.coverage
-.coverage 2
-.coverage.*
+.coverage*
 coverage.xml
 htmlcov/
 .tox/
