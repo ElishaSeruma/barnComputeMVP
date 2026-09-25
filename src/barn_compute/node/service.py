@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -131,6 +132,10 @@ class NodeService:
             write_private_bytes(
                 staging / "node.csr.pem",
                 csr.public_bytes(serialization.Encoding.PEM),
+            )
+            write_private_bytes(
+                staging / "secrets" / "admin.token",
+                (secrets.token_urlsafe(32) + "\n").encode("ascii"),
             )
             metadata = NodeMetadata(
                 node_id=node_id,

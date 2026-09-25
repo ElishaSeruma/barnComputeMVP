@@ -16,9 +16,12 @@ from .config import (
     load_config,
     save_config,
 )
+from .coordinator.admin_client import CoordinatorAdminClient
 from .coordinator.service import CoordinatorService
 from .errors import BarnError, ErrorCode
+from .node.client import CoordinatorClient
 from .node.service import NodeService
+from .server import serve_coordinator, serve_node
 
 app = typer.Typer(help="Private authenticated device groups and secure file exchange.")
 config_app = typer.Typer(help="Manage local barnCompute configuration.")
@@ -73,6 +76,10 @@ def _coordinator_service(state_dir: Path | None) -> CoordinatorService:
 def _node_service(state_dir: Path | None) -> NodeService:
     path = state_dir or load_config().state_dir / "node"
     return NodeService(path)
+
+
+def _admin_client(state_dir: Path | None, admin_url: str) -> CoordinatorAdminClient:
+    return CoordinatorAdminClient(_coordinator_service(state_dir).state_dir, admin_url)
 
 
 def _parse_duration(value: str) -> timedelta:
@@ -138,55 +145,65 @@ def coordinator_ca_export(
 @coordinator_app.command("invite")
 def coordinator_invite(
     ttl: str = typer.Option("10m", "--ttl"),
+    admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
 ) -> None:
-    invite = _coordinator_service(state_dir).create_invite(_parse_duration(ttl))
-    typer.echo(f"Invite ID: {invite.invite_id}")
-    typer.echo(f"One-use code: {invite.code}")
-    typer.echo(f"Expires at: {invite.expires_at.isoformat()}")
+    with _admin_client(state_dir, admin_url) as client:
+        invite = client.create_invite(_parse_duration(ttl))
+    typer.echo(f"Invite ID: {invite['invite_id']}")
+    typer.echo(f"One-use code: {invite['code']}")
+    typer.echo(f"Expires at: {invite['expires_at']}")
     typer.echo("Convey this code privately. It will not be displayed again.")
 
 
 @coordinator_app.command("enrolments")
 def coordinator_enrolments(
+    admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
 ) -> None:
-    pending = _coordinator_service(state_dir).list_pending_enrolments()
+    with _admin_client(state_dir, admin_url) as client:
+        pending = client.list_enrolments()
     if not pending:
         typer.echo("No pending enrolments.")
         return
     for request in pending:
         typer.echo(
-            f"{request.request_id}  {request.node_name}  {request.node_id}  "
-            f"{request.advertised_host}:{request.peer_port}  "
-            f"fingerprint={request.identity_fingerprint}"
+            f"{request['request_id']}  {request['node_name']}  {request['node_id']}  "
+            f"{request['advertised_host']}:{request['peer_port']}  "
+            f"fingerprint={request['identity_fingerprint']}"
         )
 
 
 @coordinator_app.command("approve")
 def coordinator_approve(
     request_id: str,
+    admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
 ) -> None:
-    result = _coordinator_service(state_dir).approve_enrolment(request_id)
-    typer.echo(f"Approved enrolment {result.request_id}")
+    with _admin_client(state_dir, admin_url) as client:
+        result = client.approve(request_id)
+    typer.echo(f"Approved enrolment {result['request_id']}")
 
 
 @coordinator_app.command("reject")
 def coordinator_reject(
     request_id: str,
+    admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
 ) -> None:
-    _coordinator_service(state_dir).reject_enrolment(request_id)
+    with _admin_client(state_dir, admin_url) as client:
+        client.reject(request_id)
     typer.echo(f"Rejected enrolment {request_id}")
 
 
-for command_name, command_help in (
-    ("start", "Start the coordinator services."),
-):
-    coordinator_app.command(command_name, help=command_help)(
-        _pending_command(f"coordinator {command_name}")
-    )
+@coordinator_app.command("start")
+def coordinator_start(
+    bind: str = typer.Option("0.0.0.0", "--bind"),
+    port: int = typer.Option(8443, "--port", min=1, max=65535),
+    admin_port: int = typer.Option(8754, "--admin-port", min=1, max=65535),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    serve_coordinator(_coordinator_service(state_dir).state_dir, bind, port, admin_port)
 
 
 @node_app.command("init")
@@ -199,10 +216,50 @@ def node_init(
     metadata = _node_service(state_dir).initialize(name, advertise, peer_port)
     typer.echo(f"Node ID: {metadata.node_id}")
     typer.echo(f"Identity SHA-256: {metadata.identity_fingerprint}")
-    typer.echo("Node initialized. Enrolment over HTTPS is the next service phase.")
+    typer.echo("Node initialized. Enrol it with the coordinator over verified HTTPS.")
 
 
-for command_name in ("enroll", "start", "revoke"):
+@node_app.command("enroll")
+def node_enroll(
+    coordinator: str = typer.Option(..., "--coordinator"),
+    ca_cert: Path = typer.Option(..., "--ca-cert"),
+    ca_fingerprint: str = typer.Option(..., "--ca-fingerprint"),
+    code: str | None = typer.Option(None, "--code", help="Omit to enter it privately."),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    node = _node_service(state_dir)
+    certificate = ca_cert.expanduser().resolve().read_bytes()
+    node.pin_barn_ca(certificate, ca_fingerprint)
+    invite_code = code or typer.prompt("One-use invitation code", hide_input=True)
+    with CoordinatorClient(coordinator, ca_cert.expanduser().resolve()) as client:
+        receipt = client.submit_enrolment(node, invite_code)
+    typer.echo(f"Enrolment request: {receipt.request_id}")
+    typer.echo("Status: AWAITING_APPROVAL")
+
+
+@node_app.command("enrolment-status")
+def node_enrolment_status(
+    coordinator: str = typer.Option(..., "--coordinator"),
+    ca_cert: Path = typer.Option(..., "--ca-cert"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    node = _node_service(state_dir)
+    with CoordinatorClient(coordinator, ca_cert.expanduser().resolve()) as client:
+        result = client.poll_enrolment(node)
+    typer.echo(f"Status: {result.status}")
+
+
+@node_app.command("start")
+def node_start(
+    bind: str = typer.Option("0.0.0.0", "--bind"),
+    peer_port: int = typer.Option(8445, "--peer-port", min=1, max=65535),
+    admin_port: int = typer.Option(8755, "--admin-port", min=1, max=65535),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    serve_node(_node_service(state_dir).state_dir, bind, peer_port, admin_port)
+
+
+for command_name in ("revoke",):
     node_app.command(command_name)(_pending_command(f"node {command_name}"))
 
 

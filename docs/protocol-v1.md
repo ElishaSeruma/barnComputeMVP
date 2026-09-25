@@ -1,7 +1,22 @@
 # Protocol v1
 
-Status: partial. This document records the implemented signed-request envelope;
-service routes and grant canonicalisation will be added with their code.
+Status: partial. Enrolment HTTP routes and the signed-request envelope are
+implemented; heartbeat, file, share, transfer, and relay routes remain pending.
+
+## Enrolment HTTP routes
+
+The coordinator public listener uses HTTPS with its Barn-CA-issued certificate:
+
+- `GET /v1/health`
+- `POST /v1/enrolments/challenge`
+- `POST /v1/enrolments`
+- `GET /v1/enrolments/{request_id}` with `X-Barn-Enrolment-Receipt`
+
+The separate coordinator administration listener is hard-bound to
+`127.0.0.1`, requires its private bearer token, and exposes status, invitation
+creation, pending listing, approval, and rejection below `/local/v1`. The node
+uses the same loopback-only pattern for local status. JSON requests are bounded
+to 64 KiB and errors use a structured envelope without echoing secrets.
 
 ## Signed request canonicalisation
 
@@ -53,5 +68,6 @@ The issued node certificate contains CA-signed private extensions:
 - `1.3.6.1.4.1.62187.1.1`: UTF-8 Barn UUID.
 - `1.3.6.1.4.1.62187.1.2`: raw 32-byte coordinator grant public key.
 
-These bind the grant verification key to the pinned Barn trust root. HTTP
-schemas and route behavior remain pending the coordinator HTTPS phase.
+These bind the grant verification key to the pinned Barn trust root. Binary
+protocol values are unpadded base64url in JSON. The node client requires an
+explicit CA file, refuses plaintext coordinator URLs, and disables redirects.

@@ -67,8 +67,14 @@ layers. `barn node init`, pending-enrolment listing, approval, and rejection hav
 CLI surfaces. `barn node enroll` remains intentionally unavailable until the
 verified HTTPS API carries this workflow.
 
-The phase remains open only for the matching Mac 38-test checkpoint documented
-in `docs/MAC_NODE_ENROLMENT_38_TEST_RUNBOOK.md`.
+The matching Mac checkpoint passed at commit
+`6cb8c815c2854e2814c41ededf1e00bf1b8cebea`: 38 tests with 85% coverage,
+focused enrolment tests, build, Twine, wheel inspection, clean-wheel
+installation, node initialization, and duplicate-init protection all passed.
+Detailed evidence is in
+`docs/mac_test_results/2026-09-25-node-enrolment-38.md`.
+
+The node identity and persistence-first enrolment phase is complete.
 
 ### Exit gate for this phase
 
@@ -81,11 +87,21 @@ in `docs/MAC_NODE_ENROLMENT_38_TEST_RUNBOOK.md`.
 - Ruff, unit/security tests, package build, and Twine checks pass on Windows and
   macOS.
 
+## Current Windows checkpoint
+
+The coordinator/node transport slice is implemented on Windows. It includes
+the public HTTPS enrolment API, request-bound polling, loopback-only admin APIs,
+the CA-verifying node client, and paired foreground service runners. Ruff and
+43 tests pass with 82% coverage. macOS verification for this new slice is the
+next release gate; the previous 38-test Mac checkpoint remains valid only for
+the persistence-first implementation.
+
 ## Following slices
 
-1. Coordinator and node HTTPS services plus loopback admin APIs, exposing the
-   tested enrolment workflow over verified TLS.
-2. Signed heartbeat, registry refresh, liveness state, and diagnostics.
+1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
+   record the evidence under `docs/mac_test_results`.
+2. **Next implementation:** signed heartbeat, registry refresh, liveness state,
+   and diagnostics.
 3. Immutable managed-file import and manifests.
 4. Shares, grants, peer HTTPS, resumable chunk transfer, and final integrity.
 5. Secure outbound-only relay transport and direct-to-relay failover.

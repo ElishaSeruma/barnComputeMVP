@@ -12,9 +12,10 @@ durable nonce replay protection, Barn coordinator trust initialization, public
 CA export, hashed one-use invitations, durable node identity and TLS CSR
 creation, challenge-bound proof of possession, pending enrolments, explicit
 approval/rejection, node certificate issuance and verification, initial tests,
-and Windows/macOS CI definition are implemented. Network services, heartbeat,
-managed-file transfer, relay operation, and cross-platform acceptance are **not
-yet complete**.
+public HTTPS enrolment, receipt-bound polling, loopback-only administration,
+node health endpoints, initial tests, and Windows/macOS CI definition are
+implemented. Heartbeat, managed-file transfer, relay operation, and physical
+cross-platform acceptance are **not yet complete**.
 
 ## M1 goal
 
@@ -132,9 +133,10 @@ barn coordinator start --bind 0.0.0.0 --port 8443
 barn coordinator invite --ttl 10m
 
 barn node init --name <NODE_NAME> --advertise <NODE_IP_OR_HOST> --peer-port 8445
-barn node enroll --coordinator https://<COORDINATOR>:8443 --ca-cert <CA_FILE> --code <CODE>
+barn node enroll --coordinator https://<COORDINATOR>:8443 --ca-cert <CA_FILE> --ca-fingerprint <SHA256>
 barn coordinator enrolments
 barn coordinator approve <REQUEST_ID>
+barn node enrolment-status --coordinator https://<COORDINATOR>:8443 --ca-cert <CA_FILE>
 barn node start --bind 0.0.0.0 --peer-port 8445
 
 barn nodes

@@ -21,9 +21,12 @@ classifiers = [
 ]
 dependencies = [
   "cryptography>=44.0,<46",
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
   "platformdirs>=4.3,<5",
   "pydantic>=2.10,<3",
   "typer>=0.15,<1",
+  "uvicorn>=0.35,<1",
 ]
 
 [project.optional-dependencies]
