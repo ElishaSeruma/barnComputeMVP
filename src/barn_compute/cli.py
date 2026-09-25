@@ -18,6 +18,7 @@ from .config import (
 )
 from .coordinator.service import CoordinatorService
 from .errors import BarnError, ErrorCode
+from .node.service import NodeService
 
 app = typer.Typer(help="Private authenticated device groups and secure file exchange.")
 config_app = typer.Typer(help="Manage local barnCompute configuration.")
@@ -67,6 +68,11 @@ def _pending_command(feature: str):
 def _coordinator_service(state_dir: Path | None) -> CoordinatorService:
     path = state_dir or load_config().state_dir / "coordinator"
     return CoordinatorService(path)
+
+
+def _node_service(state_dir: Path | None) -> NodeService:
+    path = state_dir or load_config().state_dir / "node"
+    return NodeService(path)
 
 
 def _parse_duration(value: str) -> timedelta:
@@ -141,10 +147,42 @@ def coordinator_invite(
     typer.echo("Convey this code privately. It will not be displayed again.")
 
 
+@coordinator_app.command("enrolments")
+def coordinator_enrolments(
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    pending = _coordinator_service(state_dir).list_pending_enrolments()
+    if not pending:
+        typer.echo("No pending enrolments.")
+        return
+    for request in pending:
+        typer.echo(
+            f"{request.request_id}  {request.node_name}  {request.node_id}  "
+            f"{request.advertised_host}:{request.peer_port}  "
+            f"fingerprint={request.identity_fingerprint}"
+        )
+
+
+@coordinator_app.command("approve")
+def coordinator_approve(
+    request_id: str,
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    result = _coordinator_service(state_dir).approve_enrolment(request_id)
+    typer.echo(f"Approved enrolment {result.request_id}")
+
+
+@coordinator_app.command("reject")
+def coordinator_reject(
+    request_id: str,
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    _coordinator_service(state_dir).reject_enrolment(request_id)
+    typer.echo(f"Rejected enrolment {request_id}")
+
+
 for command_name, command_help in (
     ("start", "Start the coordinator services."),
-    ("enrolments", "List pending enrolment requests."),
-    ("approve", "Approve a pending enrolment request."),
 ):
     coordinator_app.command(command_name, help=command_help)(
         _pending_command(f"coordinator {command_name}")
@@ -156,9 +194,12 @@ def node_init(
     name: str = typer.Option(..., "--name"),
     advertise: str = typer.Option(..., "--advertise"),
     peer_port: int = typer.Option(8445, "--peer-port", min=1, max=65535),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
 ) -> None:
-    del name, advertise, peer_port
-    _pending("node init")
+    metadata = _node_service(state_dir).initialize(name, advertise, peer_port)
+    typer.echo(f"Node ID: {metadata.node_id}")
+    typer.echo(f"Identity SHA-256: {metadata.identity_fingerprint}")
+    typer.echo("Node initialized. Enrolment over HTTPS is the next service phase.")
 
 
 for command_name in ("enroll", "start", "revoke"):
@@ -205,7 +246,7 @@ def main() -> None:
         app()
     except BarnError as exc:
         typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=2) from exc
+        raise SystemExit(2) from None
 
 
 if __name__ == "__main__":

@@ -15,6 +15,9 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from .config import ensure_private_directory, write_private_bytes
 
+BARN_ID_OID = x509.ObjectIdentifier("1.3.6.1.4.1.62187.1.1")
+GRANT_PUBLIC_KEY_OID = x509.ObjectIdentifier("1.3.6.1.4.1.62187.1.2")
+
 
 def generate_identity() -> Ed25519PrivateKey:
     return Ed25519PrivateKey.generate()
@@ -48,6 +51,14 @@ def public_key_fingerprint(key: Ed25519PublicKey) -> str:
 
     raw = key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     return hashlib.sha256(raw).hexdigest()
+
+
+def public_key_bytes(key: Ed25519PublicKey) -> bytes:
+    return key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+
+
+def load_public_key(data: bytes) -> Ed25519PublicKey:
+    return Ed25519PublicKey.from_public_bytes(data)
 
 
 def certificate_fingerprint(certificate: x509.Certificate) -> str:
@@ -98,13 +109,84 @@ def create_barn_ca(barn_id: str, name: str) -> tuple[Ed25519PrivateKey, x509.Cer
         )
         .add_extension(
             x509.UnrecognizedExtension(
-                x509.ObjectIdentifier("1.3.6.1.4.1.62187.1.1"), barn_id.encode()
+                BARN_ID_OID, barn_id.encode()
             ),
             critical=False,
         )
         .sign(key, algorithm=None)
     )
     return key, certificate
+
+
+def create_node_csr(
+    tls_key: Ed25519PrivateKey,
+    node_id: str,
+    node_name: str,
+    advertised_host: str,
+) -> x509.CertificateSigningRequest:
+    subject = x509.Name(
+        [
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "barnCompute"),
+            x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, node_id),
+            x509.NameAttribute(NameOID.COMMON_NAME, node_name),
+        ]
+    )
+    return (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(subject)
+        .add_extension(_subject_alternative_name(advertised_host), critical=False)
+        .sign(tls_key, algorithm=None)
+    )
+
+
+def issue_node_certificate(
+    ca_key: Ed25519PrivateKey,
+    ca_certificate: x509.Certificate,
+    csr: x509.CertificateSigningRequest,
+    barn_id: str,
+    grant_public_key: Ed25519PublicKey,
+    *,
+    validity: timedelta = timedelta(days=90),
+) -> x509.Certificate:
+    now = datetime.now(UTC)
+    san = csr.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    return (
+        x509.CertificateBuilder()
+        .subject_name(csr.subject)
+        .issuer_name(ca_certificate.subject)
+        .public_key(csr.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + validity)
+        .add_extension(san, critical=False)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.ExtendedKeyUsage(
+                [ExtendedKeyUsageOID.SERVER_AUTH, ExtendedKeyUsageOID.CLIENT_AUTH]
+            ),
+            critical=False,
+        )
+        .add_extension(
+            x509.UnrecognizedExtension(BARN_ID_OID, barn_id.encode()), critical=False
+        )
+        .add_extension(
+            x509.UnrecognizedExtension(
+                GRANT_PUBLIC_KEY_OID, public_key_bytes(grant_public_key)
+            ),
+            critical=False,
+        )
+        .sign(ca_key, algorithm=None)
+    )
+
+
+def certificate_san_matches(certificate_or_csr: object, advertised_host: str) -> bool:
+    extensions = certificate_or_csr.extensions  # type: ignore[attr-defined]
+    san = extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    try:
+        expected_ip = ip_address(advertised_host)
+    except ValueError:
+        return san.get_values_for_type(x509.DNSName) == [advertised_host]
+    return san.get_values_for_type(x509.IPAddress) == [expected_ip]
 
 
 def _subject_alternative_name(advertised_host: str) -> x509.SubjectAlternativeName:

@@ -33,6 +33,45 @@ class TransportMode(StrEnum):
     RELAY = "relay"
 
 
+class EnrolmentStatus(StrEnum):
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class EnrolmentChallenge(StrictModel):
+    challenge: str = Field(min_length=32, max_length=256)
+    expires_at: datetime
+
+
+class EnrolmentSubmission(StrictModel):
+    node_id: UUID
+    node_name: str = Field(min_length=1, max_length=100)
+    advertised_host: str = Field(min_length=1, max_length=253)
+    peer_port: int = Field(ge=1, le=65535)
+    protocol_version: str = PROTOCOL_VERSION
+    identity_public_key: bytes = Field(min_length=32, max_length=32)
+    csr_pem: bytes = Field(min_length=64, max_length=16384)
+    challenge: str = Field(min_length=32, max_length=256)
+    proof: bytes = Field(min_length=64, max_length=64)
+
+
+class EnrolmentReceipt(StrictModel):
+    request_id: UUID
+    receipt: str = Field(min_length=32, max_length=256)
+    status: EnrolmentStatus
+
+
+class EnrolmentResult(StrictModel):
+    request_id: UUID
+    status: EnrolmentStatus
+    barn_id: UUID | None = None
+    certificate_pem: bytes | None = None
+    ca_certificate_pem: bytes | None = None
+    grant_public_key: bytes | None = None
+    decided_at: datetime | None = None
+
+
 class ChunkManifest(StrictModel):
     index: int = Field(ge=0)
     offset: int = Field(ge=0)
@@ -79,4 +118,3 @@ class Heartbeat(StrictModel):
     storage_total: int = Field(ge=0)
     storage_available: int = Field(ge=0)
     sent_at: datetime
-

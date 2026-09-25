@@ -7,32 +7,51 @@ import json
 import os
 import secrets
 import shutil
+import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+from cryptography import x509
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
+from cryptography.x509.oid import NameOID
 from pydantic import BaseModel, ConfigDict
 
 from ..config import ensure_private_directory, write_private_bytes, write_private_json
 from ..crypto import (
     certificate_fingerprint,
+    certificate_san_matches,
     create_barn_ca,
     create_server_certificate,
     generate_identity,
+    issue_node_certificate,
     load_certificate,
+    load_private_identity,
+    load_public_key,
+    public_key_bytes,
+    public_key_fingerprint,
     save_certificate,
     save_private_identity,
 )
 from ..errors import BarnError, ErrorCode
+from ..models import (
+    PROTOCOL_VERSION,
+    EnrolmentChallenge,
+    EnrolmentReceipt,
+    EnrolmentResult,
+    EnrolmentStatus,
+    EnrolmentSubmission,
+)
+from ..node.service import canonical_enrolment_proof
 from .repository import CoordinatorRepository
 
 
 class CoordinatorMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    barn_id: str
+    barn_id: UUID
     name: str
     advertised_host: str
     created_at: datetime
@@ -46,6 +65,17 @@ class CreatedInvite:
     expires_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class PendingEnrolment:
+    request_id: str
+    node_id: str
+    node_name: str
+    advertised_host: str
+    peer_port: int
+    identity_fingerprint: str
+    created_at: datetime
+
+
 def _validate_name(name: str) -> str:
     clean = name.strip()
     if not clean or len(clean) > 100 or any(ord(character) < 32 for character in clean):
@@ -55,6 +85,14 @@ def _validate_name(name: str) -> str:
 
 def _invite_digest(code: str) -> bytes:
     return hashlib.sha256(code.encode("ascii")).digest()
+
+
+def _secret_digest(value: str) -> bytes:
+    return hashlib.sha256(value.encode("ascii")).digest()
+
+
+def _utc(value: str) -> datetime:
+    return datetime.fromisoformat(value).astimezone(UTC)
 
 
 class CoordinatorService:
@@ -171,3 +209,243 @@ class CoordinatorService:
                 invite.expires_at.isoformat(),
             )
         return invite
+
+    def create_enrolment_challenge(
+        self,
+        invite_code: str,
+        node_id: str,
+        *,
+        ttl: timedelta = timedelta(minutes=5),
+        now: datetime | None = None,
+    ) -> EnrolmentChallenge:
+        self.load_metadata()
+        checked_at = now or datetime.now(UTC)
+        try:
+            UUID(node_id)
+        except ValueError as exc:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Node ID is invalid") from exc
+        if ttl <= timedelta(0) or ttl > timedelta(minutes=10):
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Challenge TTL must be at most 10m")
+        with CoordinatorRepository(self.database_path) as repository:
+            invite = repository.get_invite_by_digest(_invite_digest(invite_code))
+            if invite is None:
+                raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Invitation is invalid")
+            if invite["consumed_at"] is not None:
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Invitation was already used")
+            if _utc(invite["expires_at"]) <= checked_at:
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Invitation has expired")
+            if repository.invite_has_active_request(invite["invite_id"]):
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Invitation is already reserved")
+            challenge = secrets.token_urlsafe(32)
+            expires_at = checked_at + ttl
+            repository.add_challenge(
+                str(uuid4()),
+                invite["invite_id"],
+                node_id,
+                _secret_digest(challenge),
+                checked_at.isoformat(),
+                expires_at.isoformat(),
+            )
+        return EnrolmentChallenge(challenge=challenge, expires_at=expires_at)
+
+    def submit_enrolment(
+        self,
+        invite_code: str,
+        submission: EnrolmentSubmission,
+        *,
+        now: datetime | None = None,
+    ) -> EnrolmentReceipt:
+        self.load_metadata()
+        checked_at = now or datetime.now(UTC)
+        if submission.protocol_version.split(".", 1)[0] != PROTOCOL_VERSION.split(".", 1)[0]:
+            raise BarnError(ErrorCode.PROTOCOL_MISMATCH, "Unsupported protocol major version")
+        try:
+            identity_key = load_public_key(submission.identity_public_key)
+            identity_key.verify(
+                submission.proof,
+                canonical_enrolment_proof(
+                    submission.challenge,
+                    submission.node_id,
+                    submission.csr_pem,
+                    submission.advertised_host,
+                    submission.peer_port,
+                    submission.protocol_version,
+                ),
+            )
+        except (InvalidSignature, ValueError) as exc:
+            raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Identity proof is invalid") from exc
+
+        try:
+            csr = x509.load_pem_x509_csr(submission.csr_pem)
+            if not csr.is_signature_valid:
+                raise ValueError("CSR signature is invalid")
+            if not certificate_san_matches(csr, submission.advertised_host):
+                raise ValueError("CSR SAN does not match advertised host")
+            organisational_unit = csr.subject.get_attributes_for_oid(
+                NameOID.ORGANIZATIONAL_UNIT_NAME
+            )
+            common_name = csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+            if [item.value for item in organisational_unit] != [str(submission.node_id)]:
+                raise ValueError("CSR Node ID does not match")
+            if [item.value for item in common_name] != [submission.node_name]:
+                raise ValueError("CSR node name does not match")
+        except (ValueError, x509.ExtensionNotFound) as exc:
+            raise BarnError(ErrorCode.INVALID_REQUEST, f"CSR is invalid: {exc}") from exc
+
+        challenge_digest = _secret_digest(submission.challenge)
+        receipt = secrets.token_urlsafe(32)
+        request_id = uuid4()
+        with CoordinatorRepository(self.database_path) as repository:
+            invite = repository.get_invite_by_digest(_invite_digest(invite_code))
+            challenge = repository.get_challenge_by_digest(challenge_digest)
+            if invite is None or challenge is None:
+                raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Invitation or challenge is invalid")
+            if challenge["invite_id"] != invite["invite_id"]:
+                raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Challenge is for another invitation")
+            if challenge["node_id"] != str(submission.node_id):
+                raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Challenge is for another node")
+            if challenge["used_at"] is not None:
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Challenge was already used")
+            if invite["consumed_at"] is not None:
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Invitation was already used")
+            if _utc(invite["expires_at"]) <= checked_at:
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Invitation has expired")
+            if _utc(challenge["expires_at"]) <= checked_at:
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Challenge has expired")
+            if repository.invite_has_active_request(invite["invite_id"]):
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Invitation is already reserved")
+            existing_node = repository.get_node(str(submission.node_id))
+            existing_request = repository.get_enrolment_by_node(str(submission.node_id))
+            for existing in (existing_node, existing_request):
+                if existing is not None:
+                    if existing["identity_public_key"] != submission.identity_public_key:
+                        raise BarnError(
+                            ErrorCode.NOT_AUTHORISED,
+                            "Node ID is already bound to another identity key",
+                        )
+                    raise BarnError(ErrorCode.INVALID_REQUEST, "Node already has an enrolment")
+            try:
+                repository.add_enrolment_request(
+                    request_id=str(request_id),
+                    invite_id=invite["invite_id"],
+                    node_id=str(submission.node_id),
+                    node_name=submission.node_name,
+                    identity_public_key=submission.identity_public_key,
+                    csr_pem=submission.csr_pem,
+                    advertised_host=submission.advertised_host,
+                    peer_port=submission.peer_port,
+                    protocol_version=submission.protocol_version,
+                    receipt_digest=_secret_digest(receipt),
+                    created_at=checked_at.isoformat(),
+                    challenge_id=challenge["challenge_id"],
+                )
+            except sqlite3.IntegrityError as exc:
+                raise BarnError(ErrorCode.INVALID_REQUEST, "Enrolment request conflicts") from exc
+        return EnrolmentReceipt(
+            request_id=request_id,
+            receipt=receipt,
+            status=EnrolmentStatus.AWAITING_APPROVAL,
+        )
+
+    def list_pending_enrolments(self) -> list[PendingEnrolment]:
+        self.load_metadata()
+        with CoordinatorRepository(self.database_path) as repository:
+            rows = repository.list_pending_enrolments()
+        return [
+            PendingEnrolment(
+                request_id=row["request_id"],
+                node_id=row["node_id"],
+                node_name=row["node_name"],
+                advertised_host=row["advertised_host"],
+                peer_port=row["peer_port"],
+                identity_fingerprint=public_key_fingerprint(
+                    load_public_key(row["identity_public_key"])
+                ),
+                created_at=_utc(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def approve_enrolment(
+        self,
+        request_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> EnrolmentResult:
+        metadata = self.load_metadata()
+        decided_at = now or datetime.now(UTC)
+        with CoordinatorRepository(self.database_path) as repository:
+            request = repository.get_enrolment_request(request_id)
+            if request is None:
+                raise BarnError(ErrorCode.INVALID_REQUEST, "Enrolment request was not found")
+            if request["status"] == EnrolmentStatus.APPROVED:
+                return self._result_from_row(request, metadata)
+            if request["status"] != EnrolmentStatus.AWAITING_APPROVAL:
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Enrolment request is not pending")
+            invite = repository.connection.execute(
+                "SELECT * FROM enrolment_invites WHERE invite_id = ?",
+                (request["invite_id"],),
+            ).fetchone()
+            if invite is None or _utc(invite["expires_at"]) <= decided_at:
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Invitation expired before approval")
+
+            csr = x509.load_pem_x509_csr(request["csr_pem"])
+            ca_key = load_private_identity(self.state_dir / "secrets" / "ca-key.pem")
+            ca_certificate = load_certificate(self.state_dir / "ca-cert.pem")
+            grant_key = load_private_identity(self.state_dir / "secrets" / "grant-key.pem")
+            certificate = issue_node_certificate(
+                ca_key,
+                ca_certificate,
+                csr,
+                str(metadata.barn_id),
+                grant_key.public_key(),
+            )
+            certificate_pem = certificate.public_bytes(serialization.Encoding.PEM)
+            ca_pem = ca_certificate.public_bytes(serialization.Encoding.PEM)
+            grant_public_key = public_key_bytes(grant_key.public_key())
+            try:
+                repository.approve_enrolment(
+                    request_id=request_id,
+                    certificate_serial=str(certificate.serial_number),
+                    certificate_pem=certificate_pem,
+                    ca_certificate_pem=ca_pem,
+                    grant_public_key=grant_public_key,
+                    decided_at=decided_at.isoformat(),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise BarnError(ErrorCode.INVALID_REQUEST, "Approval conflicts with state") from exc
+            approved = repository.get_enrolment_request(request_id)
+            assert approved is not None
+            return self._result_from_row(approved, metadata)
+
+    def reject_enrolment(self, request_id: str, *, now: datetime | None = None) -> None:
+        self.load_metadata()
+        with CoordinatorRepository(self.database_path) as repository:
+            if not repository.reject_enrolment(
+                request_id, (now or datetime.now(UTC)).isoformat()
+            ):
+                raise BarnError(ErrorCode.INVALID_REQUEST, "Enrolment request is not pending")
+
+    def poll_enrolment(self, receipt: str) -> EnrolmentResult:
+        metadata = self.load_metadata()
+        with CoordinatorRepository(self.database_path) as repository:
+            request = repository.get_enrolment_by_receipt(_secret_digest(receipt))
+        if request is None:
+            raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Enrolment receipt is invalid")
+        return self._result_from_row(request, metadata)
+
+    @staticmethod
+    def _result_from_row(
+        request: sqlite3.Row, metadata: CoordinatorMetadata
+    ) -> EnrolmentResult:
+        status = EnrolmentStatus(request["status"])
+        approved = status is EnrolmentStatus.APPROVED
+        return EnrolmentResult(
+            request_id=request["request_id"],
+            status=status,
+            barn_id=metadata.barn_id if approved else None,
+            certificate_pem=request["certificate_pem"] if approved else None,
+            ca_certificate_pem=request["ca_certificate_pem"] if approved else None,
+            grant_public_key=request["grant_public_key"] if approved else None,
+            decided_at=_utc(request["decided_at"]) if request["decided_at"] else None,
+        )

@@ -26,10 +26,19 @@ physical two-node M1 acceptance.
 - Duplicate initialization refusal and private/public key separation tests.
 - Disposable CLI initialization, CA export, and invitation workflow.
 
-This checkpoint was reverified on Windows on 2026-09-25: Ruff passed, all 18
-tests passed with 84% coverage, wheel and sdist builds succeeded, and Twine
-validated both artifacts. The expanded coordinator suite still needs to be
-recorded on macOS.
+This checkpoint was reverified on both platforms on 2026-09-25. Windows passed
+Ruff, all 18 tests with 84% coverage, wheel/sdist builds, and Twine validation.
+The Apple Silicon Mac passed the same 18-test suite with 84% coverage, editable
+and clean-wheel installation, build and Twine validation, CA export safety,
+matching CA fingerprints, one-use invitation creation, and duplicate-init
+rejection. The coordinator-bootstrap checkpoint is therefore complete.
+
+## Phase readiness decision
+
+The project is ready to begin node identity and explicit enrolment. This means
+the completed bootstrap layer is stable enough to build on; it does not mean M1
+or the release candidate is complete. TestPyPI provenance, physical two-node
+acceptance, file transfers, and relay behavior remain `NOT RUN`.
 
 ## Active phase: node identity and explicit enrolment
 
@@ -48,6 +57,18 @@ recorded on macOS.
    duplicate Node IDs with conflicting keys, and unsupported protocol majors.
 9. Add persistence and negative tests using two simulated nodes and isolated
    state directories.
+
+### Windows implementation checkpoint
+
+The persistence-first implementation is complete on Windows as of 2026-09-25.
+Ruff passes; 38 tests pass with 85% coverage; wheel/sdist build and Twine checks
+pass. The implementation includes every item above at the service and repository
+layers. `barn node init`, pending-enrolment listing, approval, and rejection have
+CLI surfaces. `barn node enroll` remains intentionally unavailable until the
+verified HTTPS API carries this workflow.
+
+The phase remains open only for the matching Mac 38-test checkpoint documented
+in `docs/MAC_NODE_ENROLMENT_38_TEST_RUNBOOK.md`.
 
 ### Exit gate for this phase
 

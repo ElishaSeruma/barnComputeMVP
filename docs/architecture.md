@@ -56,3 +56,52 @@ coordinator uses a separate Ed25519 TLS key and a 90-day certificate whose SAN
 matches the configured IP address or DNS name. Transfer grants use a third,
 independent Ed25519 key. Invitation codes contain 192 random bits and only their
 SHA-256 digests are persisted.
+
+## Node identity state
+
+Node initialization is atomic and refuses to overwrite existing state:
+
+```text
+node/
+  node.json
+  node.csr.pem
+  trusted-ca.pem
+  node-cert.pem
+  barn-ca.pem
+  grant-public.key
+  secrets/
+    identity-key.pem
+    tls-key.pem
+    enrolment-receipt.token
+```
+
+The node identity key signs application requests and enrolment proofs. A
+separate TLS key signs the CSR and matches the issued node certificate. The
+operator pins the public Barn CA by an out-of-band verified SHA-256 fingerprint
+before the node can submit an enrolment request. The pending receipt is removed
+after successful approval.
+
+## Persistence-first enrolment
+
+The current enrolment workflow is implemented in service and repository layers
+without network transport:
+
+1. Coordinator validates an active invite and issues a short-lived random
+   challenge bound to the prospective Node ID.
+2. Node signs a domain-separated proof containing the challenge, Node ID, CSR
+   digest, advertised host, peer port, and protocol version.
+3. Coordinator verifies the proof, CSR signature and subject, exact SAN,
+   challenge binding, invite state, protocol major, and identity conflicts.
+4. A valid request remains `AWAITING_APPROVAL`; the invite is reserved but not
+   consumed.
+5. Explicit approval atomically registers the node, stores the certificate,
+   marks the request approved, and consumes the invitation.
+6. The CA-signed certificate binds the Barn ID and coordinator grant public key
+   in private extensions.
+7. The node checks the pinned CA, certificate signature, TLS key, SAN, Barn ID,
+   and grant-key binding before accepting the result.
+
+Schema version 2 adds durable challenges and approval-result material while
+migrating version 1 enrolment tables without deleting state. The next phase
+exposes these operations through verified coordinator HTTPS and loopback-only
+administration APIs.

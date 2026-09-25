@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import timedelta
 
 import pytest
@@ -77,3 +78,45 @@ def test_private_keys_are_ed25519_pem(tmp_path) -> None:
     key_data = (service.state_dir / "secrets" / "grant-key.pem").read_bytes()
     key = serialization.load_pem_private_key(key_data, password=None)
     assert isinstance(key, Ed25519PrivateKey)
+
+
+def test_schema_migrates_existing_enrolment_table(tmp_path) -> None:
+    database = tmp_path / "coordinator.db"
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE enrolment_requests (
+            request_id TEXT PRIMARY KEY,
+            invite_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            node_name TEXT NOT NULL,
+            identity_public_key BLOB NOT NULL,
+            csr_pem BLOB NOT NULL,
+            advertised_host TEXT NOT NULL,
+            peer_port INTEGER NOT NULL,
+            protocol_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            receipt_digest BLOB NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            decided_at TEXT
+        );
+        """
+    )
+    connection.close()
+
+    with CoordinatorRepository(database) as repository:
+        repository.migrate()
+        columns = {
+            row["name"]
+            for row in repository.connection.execute(
+                "PRAGMA table_info(enrolment_requests)"
+            )
+        }
+        challenge_table = repository.connection.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name = 'enrolment_challenges'
+            """
+        ).fetchone()
+    assert {"certificate_pem", "ca_certificate_pem", "grant_public_key"} <= columns
+    assert challenge_table is not None
