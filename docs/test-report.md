@@ -8,11 +8,11 @@ macOS version/architecture/Python/pip: macOS on Apple Silicon, Python 3.12.14; e
 Windows version/architecture/Python/pip: local foundation checks passed on Python 3.12.10; exact Windows, architecture, and pip versions NOT RECORDED
 Coordinator and Node IDs: NOT RUN
 Installation provenance on each host: NOT RUN
-Automated unit/integration/security/packaging: Windows coordinator-foundation checks PASS with 18 tests and 84% coverage on Python 3.12.10; macOS earlier foundation checkpoint PASS with 12 tests and 84% coverage on Python 3.12.14; the expanded coordinator suite has not yet run on macOS; `ruff check .`, `pytest -q --cov=barn_compute`, `python -m build`, and `twine check dist/*` passed at the recorded checkpoints; integration and full security suites NOT RUN
+Automated unit/integration/security/packaging: Windows coordinator-bootstrap checks reverified on 2026-09-25 with 18 tests passing and 84% coverage on Python 3.12.10; Ruff, wheel/sdist build, and `twine check dist/*` PASS. macOS earlier foundation checkpoint PASS with 12 tests and 84% coverage on Python 3.12.14; the expanded 18-test coordinator suite has not yet been recorded on macOS. Integration and full security suites NOT RUN
 Physical matrix F01-F24: NOT RUN
 SHA-256 Mac-to-Windows: NOT RUN
 SHA-256 Windows-to-Mac: NOT RUN
 Measured resume behaviour, memory, network failures: NOT RUN
-Known issues and blocking defects: coordinator, node agent, file transfer, and relay implementation incomplete
+Known issues and blocking defects: coordinator network/admin services, node enrolment and agent, file transfer, and relay implementation incomplete
 Release verdict: NOT YET RUN
 Human reviewer and UTC date: NOT RUN
