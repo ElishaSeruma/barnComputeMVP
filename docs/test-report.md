@@ -78,12 +78,11 @@ Inner protected sessions, production deployment, ticket retrieval surfaces, and
 physical failover remain NOT RUN.
 
 Inner session and ticket retrieval checkpoint: Windows PASS on 2026-09-26 with
-Ruff PASS; full suite PASS (62 tests, 79% coverage). macOS FAIL at `d1c4148` on
-2026-09-26: pytest import PASS (pytest 8.4.2); Ruff PASS; full suite FAIL (1
-failed, 61 passed in 4.84s; interim coverage output 79%). The authenticated
-relay-ticket admin endpoint passes a TTL argument to
-`CoordinatorService.issue_relay_ticket`, but the service method does not accept
-it. Detailed failure evidence and the rerun command are in
+Ruff PASS; full suite PASS (62 tests, 79% coverage). macOS initially failed at
+`d1c4148` because the admin route passed the relay-ticket TTL positionally;
+the route was corrected to match the service's keyword-only signature. The
+corrected local rerun passed Ruff and the full suite (62 tests, 79% coverage).
+The original failure and resolution are recorded in
 `docs/mac_test_results/2026-09-26-inner-session-failure.md`. Coverage includes
 the authenticated relay-ticket retrieval endpoint and X25519/HKDF/
 ChaCha20-Poly1305 envelope round-trip with associated-data rejection. The

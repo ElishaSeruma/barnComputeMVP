@@ -61,5 +61,8 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 
 ## Status
 
-The macOS 62-test / 79%-coverage checkpoint remains **FAIL** pending the
-service/endpoint signature correction and a clean rerun.
+## Resolution
+
+The admin route now passes `ttl` by keyword, matching the service's
+keyword-only signature. After the fix, the full suite and Ruff checks passed;
+the corrected checkpoint is recorded in the central test report.

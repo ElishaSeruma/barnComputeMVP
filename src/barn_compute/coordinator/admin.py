@@ -124,7 +124,7 @@ def create_admin_app(service: CoordinatorService, admin_token: str) -> FastAPI:
         _admin: None = Depends(require_admin),
     ) -> RelayTicketResponse:
         ticket = service.issue_relay_ticket(
-            UUID(source_node_id), UUID(recipient_node_id), timedelta(seconds=ttl_seconds)
+            UUID(source_node_id), UUID(recipient_node_id), ttl=timedelta(seconds=ttl_seconds)
         )
         return RelayTicketResponse(
             **ticket.model_dump(exclude={"signature"}),
