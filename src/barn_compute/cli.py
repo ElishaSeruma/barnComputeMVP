@@ -259,6 +259,34 @@ def node_start(
     serve_node(_node_service(state_dir).state_dir, bind, peer_port, admin_port)
 
 
+@node_app.command("heartbeat")
+def node_heartbeat(
+    coordinator: str = typer.Option(..., "--coordinator"),
+    ca_cert: Path = typer.Option(..., "--ca-cert"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    node = _node_service(state_dir)
+    with CoordinatorClient(coordinator, ca_cert.expanduser().resolve()) as client:
+        result = client.send_heartbeat(node)
+    typer.echo(f"Status: {result['status']}")
+
+
+@node_app.command("registry-refresh")
+def node_registry_refresh(
+    coordinator: str = typer.Option(..., "--coordinator"),
+    ca_cert: Path = typer.Option(..., "--ca-cert"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    node = _node_service(state_dir)
+    with CoordinatorClient(coordinator, ca_cert.expanduser().resolve()) as client:
+        result = client.refresh_registry(node)
+    for record in result["nodes"]:
+        typer.echo(
+            f"{record['node_id']}  {record['name']}  {record['status']}  "
+            f"{record['peer_endpoint']}"
+        )
+
+
 for command_name in ("revoke",):
     node_app.command(command_name)(_pending_command(f"node {command_name}"))
 
@@ -294,8 +322,18 @@ def doctor(as_json: bool = typer.Option(False, "--json")) -> None:
 
 
 @app.command("nodes")
-def nodes() -> None:
-    _pending("nodes")
+def nodes(
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    path = _node_service(state_dir).state_dir / "registry.json"
+    if not path.exists():
+        raise BarnError(ErrorCode.CONFIGURATION, "Registry is unavailable; refresh it first")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for record in payload["nodes"]:
+        typer.echo(
+            f"{record['node_id']}  {record['name']}  {record['status']}  "
+            f"{record['peer_endpoint']}"
+        )
 
 
 def main() -> None:

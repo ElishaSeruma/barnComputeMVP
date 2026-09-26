@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Header
+from dataclasses import asdict
+from datetime import UTC, datetime
+
+from fastapi import FastAPI, Header, Request
+from pydantic import ValidationError
 
 from .. import __version__
 from ..api_models import (
     ChallengeRequest,
     ChallengeResponse,
     EnrolmentRequest,
+    HeartbeatRequest,
+    HeartbeatResponse,
+    NodeRecordResponse,
     ReceiptResponse,
+    RegistryResponse,
     ResultResponse,
     StatusResponse,
     decode_binary,
     encode_binary,
 )
+from ..auth import SignedRequest
 from ..errors import BarnError, ErrorCode
 from ..http_common import install_http_safety
 from ..models import EnrolmentSubmission
@@ -96,5 +105,64 @@ def create_public_app(service: CoordinatorService) -> FastAPI:
         if str(enrolment.request_id) != request_id:
             raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Enrolment receipt is invalid")
         return _result_response(enrolment)
+
+    def signed_request(
+        request: Request,
+        body: bytes,
+        timestamp: str | None,
+        nonce: str | None,
+        signature: str | None,
+    ) -> SignedRequest:
+        if not all((timestamp, nonce, signature)):
+            raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Signed request headers are required")
+        return SignedRequest(
+            method=request.method,
+            target=request.url.path + (f"?{request.url.query}" if request.url.query else ""),
+            timestamp=timestamp,
+            nonce=nonce,
+            signature=signature,
+            body=body,
+        )
+
+    @app.post("/v1/heartbeat", response_model=HeartbeatResponse)
+    async def heartbeat(
+        request: Request,
+        x_barn_timestamp: str | None = Header(None),
+        x_barn_nonce: str | None = Header(None),
+        x_barn_signature: str | None = Header(None),
+    ) -> HeartbeatResponse:
+        body = await request.body()
+        try:
+            value = HeartbeatRequest.model_validate_json(body)
+        except ValidationError as exc:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Heartbeat is invalid") from exc
+        accepted_at = service.accept_heartbeat(
+            value,
+            signed_request(
+                request, body, x_barn_timestamp, x_barn_nonce, x_barn_signature
+            ),
+        )
+        return HeartbeatResponse(accepted_at=accepted_at, status="ONLINE")
+
+    @app.get("/v1/nodes", response_model=RegistryResponse)
+    async def nodes(
+        request: Request,
+        x_barn_node_id: str | None = Header(None),
+        x_barn_timestamp: str | None = Header(None),
+        x_barn_nonce: str | None = Header(None),
+        x_barn_signature: str | None = Header(None),
+    ) -> RegistryResponse:
+        if not x_barn_node_id:
+            raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Node ID is required")
+        generated_at = datetime.now(UTC)
+        records = service.list_registered_nodes(
+            x_barn_node_id,
+            signed_request(request, b"", x_barn_timestamp, x_barn_nonce, x_barn_signature),
+            now=generated_at,
+        )
+        return RegistryResponse(
+            generated_at=generated_at,
+            nodes=[NodeRecordResponse(**asdict(record)) for record in records],
+        )
 
     return app

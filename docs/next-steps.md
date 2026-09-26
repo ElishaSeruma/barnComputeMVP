@@ -87,23 +87,34 @@ The node identity and persistence-first enrolment phase is complete.
 - Ruff, unit/security tests, package build, and Twine checks pass on Windows and
   macOS.
 
-## Current Windows checkpoint
+### Heartbeat and registry checkpoint
+
+The signed heartbeat and registry slice is complete on Windows as of
+2026-09-26. Ruff passes; 47 tests pass with 81% coverage. The implementation
+includes durable heartbeat sequence state, signed heartbeat and registry HTTP
+routes, nonce and sequence replay protection, storage and software metadata,
+liveness transitions, registry caching, and node CLI commands for heartbeat,
+registry refresh, and local node listing.
+
+The remaining release gates are cross-platform verification, physical
+two-node acceptance, managed-file transfer, and relay behavior.
+
+### Current Windows checkpoint
 
 The coordinator/node transport slice is implemented on Windows. It includes
 the public HTTPS enrolment API, request-bound polling, loopback-only admin APIs,
-the CA-verifying node client, and paired foreground service runners. Ruff and
-43 tests pass with 82% coverage. macOS verification for this new slice is the
-next release gate; the previous 38-test Mac checkpoint remains valid only for
-the persistence-first implementation.
+the CA-verifying node client, paired foreground service runners, and the signed
+heartbeat/registry routes. Ruff and 47 tests pass with 81% coverage. macOS
+verification for the newer transport and heartbeat slices is the next release
+gate; the previous 38-test Mac checkpoint remains valid only for the
+persistence-first implementation.
 
 ## Following slices
 
 1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
    record the evidence under `docs/mac_test_results`.
-2. **Next implementation:** signed heartbeat, registry refresh, liveness state,
-   and diagnostics.
-3. Immutable managed-file import and manifests.
-4. Shares, grants, peer HTTPS, resumable chunk transfer, and final integrity.
-5. Secure outbound-only relay transport and direct-to-relay failover.
-6. Complete automated security and packaging gates.
-7. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.
+2. **Next implementation:** immutable managed-file import and manifests.
+3. Shares, grants, peer HTTPS, resumable chunk transfer, and final integrity.
+4. Secure outbound-only relay transport and direct-to-relay failover.
+5. Complete automated security and packaging gates.
+6. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.

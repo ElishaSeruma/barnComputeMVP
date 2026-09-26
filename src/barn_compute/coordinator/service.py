@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.x509.oid import NameOID
 from pydantic import BaseModel, ConfigDict
 
+from ..auth import NonceStore, SignedRequest, verify_request
 from ..config import ensure_private_directory, write_private_bytes, write_private_json
 from ..crypto import (
     certificate_fingerprint,
@@ -43,6 +44,8 @@ from ..models import (
     EnrolmentResult,
     EnrolmentStatus,
     EnrolmentSubmission,
+    Heartbeat,
+    NodeStatus,
 )
 from ..node.service import canonical_enrolment_proof
 from .repository import CoordinatorRepository
@@ -74,6 +77,18 @@ class PendingEnrolment:
     peer_port: int
     identity_fingerprint: str
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RegisteredNode:
+    node_id: str
+    name: str
+    status: NodeStatus
+    peer_endpoint: str
+    software_version: str | None
+    storage_total: int | None
+    storage_available: int | None
+    last_seen_at: datetime | None
 
 
 def _validate_name(name: str) -> str:
@@ -433,6 +448,102 @@ class CoordinatorService:
         if request is None:
             raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Enrolment receipt is invalid")
         return self._result_from_row(request, metadata)
+
+    def _authenticate_node(
+        self, node_id: str, request: SignedRequest, *, now: datetime
+    ) -> sqlite3.Row:
+        with CoordinatorRepository(self.database_path) as repository:
+            node = repository.get_node(node_id)
+        if node is None or node["status"] == NodeStatus.REVOKED:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Node is not an active Barn member")
+        with NonceStore(self.state_dir / "auth-nonces.db") as nonce_store:
+            verify_request(
+                load_public_key(node["identity_public_key"]),
+                request,
+                node_id,
+                nonce_store,
+                now=now,
+            )
+        return node
+
+    def accept_heartbeat(
+        self,
+        heartbeat: Heartbeat,
+        request: SignedRequest,
+        *,
+        now: datetime | None = None,
+    ) -> datetime:
+        checked_at = now or datetime.now(UTC)
+        if heartbeat.sent_at.tzinfo is None:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Heartbeat time must include UTC offset")
+        if heartbeat.storage_available > heartbeat.storage_total:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Available storage exceeds total storage")
+        self._authenticate_node(str(heartbeat.node_id), request, now=checked_at)
+        host, separator, port_text = heartbeat.peer_endpoint.rpartition(":")
+        if not separator or not host:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Peer endpoint is invalid")
+        try:
+            port = int(port_text)
+        except ValueError as exc:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Peer endpoint is invalid") from exc
+        if not 1 <= port <= 65535:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Peer endpoint port is invalid")
+        try:
+            with CoordinatorRepository(self.database_path) as repository:
+                accepted = repository.record_heartbeat(
+                    node_id=str(heartbeat.node_id),
+                    boot_epoch=str(heartbeat.boot_epoch),
+                    sequence=heartbeat.sequence,
+                    advertised_host=host,
+                    peer_port=port,
+                    software_version=heartbeat.software_version,
+                    storage_total=heartbeat.storage_total,
+                    storage_available=heartbeat.storage_available,
+                    seen_at=checked_at.isoformat(),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise BarnError(
+                ErrorCode.REPLAY_DETECTED, "Heartbeat sequence did not advance"
+            ) from exc
+        if not accepted:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Node is not an active Barn member")
+        return checked_at
+
+    def list_registered_nodes(
+        self,
+        node_id: str,
+        request: SignedRequest,
+        *,
+        now: datetime | None = None,
+    ) -> list[RegisteredNode]:
+        checked_at = now or datetime.now(UTC)
+        self._authenticate_node(node_id, request, now=checked_at)
+        with CoordinatorRepository(self.database_path) as repository:
+            rows = repository.list_nodes()
+        result = []
+        for row in rows:
+            last_seen = _utc(row["last_seen_at"]) if row["last_seen_at"] else None
+            if row["status"] == NodeStatus.REVOKED:
+                status = NodeStatus.REVOKED
+            elif last_seen is None or checked_at - last_seen > timedelta(seconds=120):
+                status = NodeStatus.OFFLINE
+            elif checked_at - last_seen > timedelta(seconds=45):
+                status = NodeStatus.SUSPECT
+            else:
+                status = NodeStatus.ONLINE
+            result.append(
+                RegisteredNode(
+                    node_id=row["node_id"],
+                    name=row["name"],
+                    status=status,
+                    peer_endpoint=f"{row['advertised_host']}:{row['peer_port']}",
+                    software_version=row["software_version"],
+                    storage_total=row["storage_total"],
+                    storage_available=row["storage_available"],
+                    last_seen_at=last_seen,
+                )
+            )
+        return result
 
     @staticmethod
     def _result_from_row(

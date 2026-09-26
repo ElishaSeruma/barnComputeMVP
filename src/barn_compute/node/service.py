@@ -16,6 +16,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from pydantic import BaseModel, ConfigDict
 
+from .. import __version__
 from ..config import ensure_private_directory, write_private_bytes, write_private_json
 from ..crypto import (
     BARN_ID_OID,
@@ -36,6 +37,7 @@ from ..models import (
     EnrolmentResult,
     EnrolmentStatus,
     EnrolmentSubmission,
+    Heartbeat,
     NodeStatus,
 )
 
@@ -54,6 +56,13 @@ class NodeMetadata(BaseModel):
     status: NodeStatus = NodeStatus.UNREGISTERED
     barn_id: UUID | None = None
     enrolment_request_id: UUID | None = None
+
+
+class HeartbeatState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    boot_epoch: UUID
+    sequence: int
 
 
 def _valid_name(name: str) -> str:
@@ -278,3 +287,36 @@ class NodeService:
         write_private_json(self.metadata_path, approved.model_dump(mode="json"))
         (self.state_dir / "secrets" / "enrolment-receipt.token").unlink(missing_ok=True)
         return approved
+
+    def next_heartbeat(self) -> Heartbeat:
+        metadata = self.load_metadata()
+        if metadata.status not in (
+            NodeStatus.APPROVED,
+            NodeStatus.ONLINE,
+            NodeStatus.SUSPECT,
+            NodeStatus.OFFLINE,
+        ):
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Node is not approved")
+        state_path = self.state_dir / "heartbeat.json"
+        try:
+            state = HeartbeatState.model_validate_json(state_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            state = HeartbeatState(boot_epoch=uuid4(), sequence=0)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise BarnError(ErrorCode.CONFIGURATION, "Heartbeat state is invalid") from exc
+        state = state.model_copy(update={"sequence": state.sequence + 1})
+        write_private_json(state_path, state.model_dump(mode="json"))
+        usage = shutil.disk_usage(self.state_dir)
+        return Heartbeat(
+            node_id=metadata.node_id,
+            boot_epoch=state.boot_epoch,
+            sequence=state.sequence,
+            peer_endpoint=f"{metadata.advertised_host}:{metadata.peer_port}",
+            software_version=__version__,
+            storage_total=usage.total,
+            storage_available=usage.free,
+            sent_at=datetime.now(UTC),
+        )
+
+    def store_registry(self, payload: dict[str, object]) -> None:
+        write_private_json(self.state_dir / "registry.json", payload)

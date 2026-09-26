@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
 from ..api_models import decode_binary, encode_binary
+from ..auth import sign_request
+from ..crypto import load_private_identity
 from ..errors import BarnError, ErrorCode
 from ..models import (
     EnrolmentChallenge,
@@ -131,3 +134,41 @@ class CoordinatorClient:
         if result.status is EnrolmentStatus.APPROVED:
             node.complete_enrolment(result)
         return result
+
+    @staticmethod
+    def _signed_headers(node: NodeService, method: str, target: str, body: bytes) -> dict[str, str]:
+        metadata = node.load_metadata()
+        timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        nonce = uuid4().hex
+        key = load_private_identity(node.state_dir / "secrets" / "identity-key.pem")
+        return {
+            "X-Barn-Node-ID": str(metadata.node_id),
+            "X-Barn-Timestamp": timestamp,
+            "X-Barn-Nonce": nonce,
+            "X-Barn-Signature": sign_request(key, method, target, timestamp, nonce, body),
+        }
+
+    def send_heartbeat(self, node: NodeService) -> dict[str, object]:
+        heartbeat = node.next_heartbeat()
+        body = heartbeat.model_dump_json().encode("utf-8")
+        target = "/v1/heartbeat"
+        response = self.client.post(
+            target,
+            content=body,
+            headers={
+                **self._signed_headers(node, "POST", target, body),
+                "Content-Type": "application/json",
+            },
+        )
+        self._raise_for_error(response)
+        return dict(response.json())
+
+    def refresh_registry(self, node: NodeService) -> dict[str, object]:
+        target = "/v1/nodes"
+        response = self.client.get(
+            target, headers=self._signed_headers(node, "GET", target, b"")
+        )
+        self._raise_for_error(response)
+        payload = dict(response.json())
+        node.store_registry(payload)
+        return payload

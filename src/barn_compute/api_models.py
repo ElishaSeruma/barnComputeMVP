@@ -9,7 +9,7 @@ from uuid import UUID
 
 from pydantic import Field, SecretStr
 
-from .models import EnrolmentStatus, StrictModel
+from .models import EnrolmentStatus, Heartbeat, NodeStatus, StrictModel
 
 
 def encode_binary(value: bytes) -> str:
@@ -85,3 +85,27 @@ class PendingResponse(StrictModel):
 class StatusResponse(StrictModel):
     status: str
     version: str
+
+
+class HeartbeatResponse(StrictModel):
+    accepted_at: datetime
+    status: NodeStatus
+
+
+class NodeRecordResponse(StrictModel):
+    node_id: UUID
+    name: str
+    status: NodeStatus
+    peer_endpoint: str
+    software_version: str | None = None
+    storage_total: int | None = None
+    storage_available: int | None = None
+    last_seen_at: datetime | None = None
+
+
+class RegistryResponse(StrictModel):
+    generated_at: datetime
+    nodes: list[NodeRecordResponse]
+
+
+HeartbeatRequest = Heartbeat

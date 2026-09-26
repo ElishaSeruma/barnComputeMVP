@@ -6,7 +6,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class CoordinatorRepository:
@@ -106,6 +106,19 @@ class CoordinatorRepository:
                     self.connection.execute(
                         f"ALTER TABLE enrolment_requests ADD COLUMN {name} {definition}"
                     )
+            node_columns = {
+                row["name"] for row in self.connection.execute("PRAGMA table_info(nodes)")
+            }
+            for name, definition in (
+                ("last_seen_at", "TEXT"),
+                ("boot_epoch", "TEXT"),
+                ("heartbeat_sequence", "INTEGER"),
+                ("software_version", "TEXT"),
+                ("storage_total", "INTEGER"),
+                ("storage_available", "INTEGER"),
+            ):
+                if name not in node_columns:
+                    self.connection.execute(f"ALTER TABLE nodes ADD COLUMN {name} {definition}")
             self.connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (SCHEMA_VERSION, datetime.now(UTC).isoformat()),
@@ -251,6 +264,50 @@ class CoordinatorRepository:
         return self.connection.execute(
             "SELECT * FROM nodes WHERE node_id = ?", (node_id,)
         ).fetchone()
+
+    def list_nodes(self) -> list[sqlite3.Row]:
+        return list(self.connection.execute("SELECT * FROM nodes ORDER BY name, node_id"))
+
+    def record_heartbeat(
+        self,
+        *,
+        node_id: str,
+        boot_epoch: str,
+        sequence: int,
+        advertised_host: str,
+        peer_port: int,
+        software_version: str,
+        storage_total: int,
+        storage_available: int,
+        seen_at: str,
+    ) -> bool:
+        with self.connection:
+            row = self.get_node(node_id)
+            if row is None or row["status"] == "REVOKED":
+                return False
+            if row["boot_epoch"] == boot_epoch and (row["heartbeat_sequence"] or 0) >= sequence:
+                raise sqlite3.IntegrityError("Heartbeat sequence did not advance")
+            self.connection.execute(
+                """
+                UPDATE nodes
+                SET advertised_host = ?, peer_port = ?, last_seen_at = ?,
+                    boot_epoch = ?, heartbeat_sequence = ?, software_version = ?,
+                    storage_total = ?, storage_available = ?
+                WHERE node_id = ?
+                """,
+                (
+                    advertised_host,
+                    peer_port,
+                    seen_at,
+                    boot_epoch,
+                    sequence,
+                    software_version,
+                    storage_total,
+                    storage_available,
+                    node_id,
+                ),
+            )
+        return True
 
     def get_enrolment_by_receipt(self, receipt_digest: bytes) -> sqlite3.Row | None:
         return self.connection.execute(
