@@ -37,6 +37,7 @@ from ..crypto import (
     save_private_identity,
 )
 from ..errors import BarnError, ErrorCode
+from ..grants import canonical_transfer_grant
 from ..models import (
     PROTOCOL_VERSION,
     EnrolmentChallenge,
@@ -110,30 +111,6 @@ def _secret_digest(value: str) -> bytes:
 
 def _utc(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(UTC)
-
-
-def canonical_transfer_grant(
-    grant_id: UUID,
-    share_id: UUID,
-    transfer_id: UUID,
-    file_id: UUID,
-    source_node_id: UUID,
-    recipient_node_id: UUID,
-    issued_at: datetime,
-    expires_at: datetime,
-) -> bytes:
-    payload = {
-        "domain": "barn-transfer-grant-v1",
-        "grant_id": str(grant_id),
-        "share_id": str(share_id),
-        "transfer_id": str(transfer_id),
-        "file_id": str(file_id),
-        "source_node_id": str(source_node_id),
-        "recipient_node_id": str(recipient_node_id),
-        "issued_at": issued_at.isoformat().replace("+00:00", "Z"),
-        "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
-    }
-    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 class CoordinatorService:

@@ -24,3 +24,9 @@ pytest import PASS (pytest 8.4.2); Ruff PASS; full suite PASS (52 tests in
 expiry, revocation, recipient binding, and signed five-minute transfer grants.
 Detailed macOS evidence is in `docs/mac_test_results/2026-09-26-share-grants.md`.
 Peer transfer and relay behavior remain NOT RUN.
+
+Peer delivery checkpoint: Windows PASS on 2026-09-26 with Ruff PASS, 53 tests
+PASS, and 80% coverage. Coverage includes grant-authenticated manifest and
+fixed-chunk routes, grant signature and expiry checks, source/file scope checks,
+and chunk integrity validation. Durable transfer sessions, resume, and relay
+behavior remain NOT RUN.

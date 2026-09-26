@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 
-from fastapi import Depends, FastAPI, Header
+from fastapi import Depends, FastAPI, Header, Response
 
 from .. import __version__
-from ..api_models import StatusResponse
+from ..api_models import StatusResponse, decode_binary
 from ..errors import BarnError, ErrorCode
 from ..http_common import install_http_safety
-from ..models import NodeStatus
+from ..models import FileManifest, NodeStatus, TransferGrant
 from .service import NodeService
 
 
@@ -29,6 +30,42 @@ def create_peer_app(service: NodeService) -> FastAPI:
         ):
             raise BarnError(ErrorCode.NOT_AUTHORISED, "Node is not approved")
         return StatusResponse(status=metadata.status, version=__version__)
+
+    def grant_from_header(value: str | None) -> TransferGrant:
+        if not value:
+            raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Transfer grant is required")
+        try:
+            payload = json.loads(decode_binary(value))
+            payload["signature"] = decode_binary(payload["signature"])
+            return TransferGrant.model_validate(payload)
+        except (ValueError, TypeError) as exc:
+            raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Transfer grant is invalid") from exc
+
+    @app.get("/v1/files/{file_id}/manifest", response_model=FileManifest)
+    async def manifest(
+        file_id: str,
+        x_barn_transfer_grant: str | None = Header(None),
+    ) -> FileManifest:
+        grant = grant_from_header(x_barn_transfer_grant)
+        if str(grant.file_id) != file_id:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant file scope is invalid")
+        try:
+            return next(item for item in service.list_files() if item.file_id == grant.file_id)
+        except StopIteration as exc:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Managed file is unavailable") from exc
+
+    @app.get("/v1/files/{file_id}/chunks/{index}")
+    async def chunk(
+        file_id: str,
+        index: int,
+        x_barn_transfer_grant: str | None = Header(None),
+    ) -> Response:
+        grant = grant_from_header(x_barn_transfer_grant)
+        if str(grant.file_id) != file_id:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant file scope is invalid")
+        return Response(
+            service.read_grant_chunk(grant, index), media_type="application/octet-stream"
+        )
 
     return app
 

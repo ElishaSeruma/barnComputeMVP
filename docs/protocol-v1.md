@@ -2,8 +2,8 @@
 
 Status: partial. Enrolment HTTP routes and the signed-request envelope are
 implemented; heartbeat and registry routes, local immutable file import, and
-share/grant authority are implemented; peer transfer and relay routes remain
-pending.
+share/grant authority and grant-authenticated peer manifest/chunk routes are
+implemented; durable transfer sessions and relay routes remain pending.
 
 ## Enrolment HTTP routes
 

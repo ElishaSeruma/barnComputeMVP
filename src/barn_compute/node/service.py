@@ -26,11 +26,13 @@ from ..crypto import (
     create_node_csr,
     generate_identity,
     load_private_identity,
+    load_public_key,
     public_key_bytes,
     public_key_fingerprint,
     save_private_identity,
 )
 from ..errors import BarnError, ErrorCode
+from ..grants import canonical_transfer_grant
 from ..models import (
     CHUNK_SIZE,
     MAX_FILE_SIZE,
@@ -43,6 +45,7 @@ from ..models import (
     FileManifest,
     Heartbeat,
     NodeStatus,
+    TransferGrant,
 )
 
 ENROLMENT_PROOF_DOMAIN = b"barn-enrolment-proof-v1\n"
@@ -408,3 +411,49 @@ class NodeService:
                     ErrorCode.CONFIGURATION, "Managed file manifest is invalid"
                 ) from exc
         return manifests
+
+    def read_grant_chunk(
+        self, grant: TransferGrant, index: int, *, now: datetime | None = None
+    ) -> bytes:
+        checked_at = now or datetime.now(UTC)
+        metadata = self.load_metadata()
+        if grant.source_node_id != metadata.node_id:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant source does not match this node")
+        if checked_at < grant.issued_at or checked_at >= grant.expires_at:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Transfer grant is expired")
+        try:
+            load_public_key((self.state_dir / "grant-public.key").read_bytes()).verify(
+                grant.signature,
+                canonical_transfer_grant(
+                    grant.grant_id,
+                    grant.share_id,
+                    grant.transfer_id,
+                    grant.file_id,
+                    grant.source_node_id,
+                    grant.recipient_node_id,
+                    grant.issued_at,
+                    grant.expires_at,
+                ),
+            )
+        except (InvalidSignature, OSError, ValueError) as exc:
+            raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Transfer grant is invalid") from exc
+        manifest_path = self.state_dir / "managed" / str(grant.file_id) / "manifest.json"
+        data_path = manifest_path.parent / "data"
+        try:
+            manifest = FileManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+            chunk = manifest.chunks[index]
+        except (IndexError, OSError, ValueError) as exc:
+            raise BarnError(
+                ErrorCode.INVALID_REQUEST, "Requested file chunk is unavailable"
+            ) from exc
+        if manifest.file_id != grant.file_id or manifest.owner_node_id != metadata.node_id:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant file scope is invalid")
+        try:
+            with data_path.open("rb") as handle:
+                handle.seek(chunk.offset)
+                payload = handle.read(chunk.length)
+        except OSError as exc:
+            raise BarnError(ErrorCode.CONFIGURATION, "Managed file is unavailable") from exc
+        if len(payload) != chunk.length or hashlib.sha256(payload).hexdigest() != chunk.sha256:
+            raise BarnError(ErrorCode.CONFIGURATION, "Managed file chunk failed integrity check")
+        return payload

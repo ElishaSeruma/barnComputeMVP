@@ -123,6 +123,18 @@ coverage.
 Peer HTTPS serving, share HTTP/CLI surfaces, chunk transfer, resume journals,
 and relay transport remain separate stages.
 
+### Peer delivery checkpoint
+
+The grant-authenticated peer delivery slice is complete on Windows as of
+2026-09-26. Approved source nodes now expose grant-validated manifest and fixed
+chunk endpoints over their existing Barn-CA HTTPS listener. Delivery checks
+grant signatures, expiry, source and file scope, manifest ownership, chunk
+bounds, and per-chunk SHA-256 integrity. Ruff passes and the full suite passes
+with 53 tests and 80% coverage.
+
+Durable transfer sessions, recipient-side journals, resume, final assembly,
+share HTTP/CLI surfaces, and relay transport remain separate stages.
+
 ### Current Windows checkpoint
 
 The coordinator/node transport slice is implemented on Windows. It includes
@@ -137,8 +149,8 @@ persistence-first implementation.
 
 1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
    record the evidence under `docs/mac_test_results`.
-2. **Next implementation:** peer HTTPS share delivery and transfer sessions.
-3. Resumable chunk journals, final integrity, and export.
+2. **Next implementation:** durable transfer sessions and recipient-side journals.
+3. Resume, final integrity, and safe export.
 4. Secure outbound-only relay transport and direct-to-relay failover.
 5. Complete automated security and packaging gates.
 6. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.
