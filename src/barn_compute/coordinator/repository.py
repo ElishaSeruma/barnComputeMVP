@@ -6,7 +6,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class CoordinatorRepository:
@@ -91,6 +91,17 @@ class CoordinatorRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_challenges_expiry
                     ON enrolment_challenges(expires_at);
+                CREATE TABLE IF NOT EXISTS file_shares (
+                    share_id TEXT PRIMARY KEY,
+                    file_id TEXT NOT NULL,
+                    source_node_id TEXT NOT NULL,
+                    recipient_node_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    revoked_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_file_shares_recipient
+                    ON file_shares(recipient_node_id, expires_at);
                 """
             )
             columns = {
@@ -130,6 +141,50 @@ class CoordinatorRepository:
                 "INSERT INTO barns(barn_id, name, advertised_host, created_at) VALUES (?, ?, ?, ?)",
                 (barn_id, name, advertised_host, created_at),
             )
+
+    def add_share(
+        self,
+        *,
+        share_id: str,
+        file_id: str,
+        source_node_id: str,
+        recipient_node_id: str,
+        created_at: str,
+        expires_at: str,
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO file_shares(
+                    share_id, file_id, source_node_id, recipient_node_id,
+                    created_at, expires_at, revoked_at
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (share_id, file_id, source_node_id, recipient_node_id, created_at, expires_at),
+            )
+
+    def get_share(self, share_id: str) -> sqlite3.Row | None:
+        return self.connection.execute(
+            "SELECT * FROM file_shares WHERE share_id = ?", (share_id,)
+        ).fetchone()
+
+    def list_shares(self, *, recipient_node_id: str | None = None) -> list[sqlite3.Row]:
+        if recipient_node_id is None:
+            return list(self.connection.execute("SELECT * FROM file_shares ORDER BY created_at"))
+        return list(
+            self.connection.execute(
+                "SELECT * FROM file_shares WHERE recipient_node_id = ? ORDER BY created_at",
+                (recipient_node_id,),
+            )
+        )
+
+    def revoke_share(self, share_id: str, revoked_at: str) -> bool:
+        with self.connection:
+            cursor = self.connection.execute(
+                "UPDATE file_shares SET revoked_at = ? WHERE share_id = ? AND revoked_at IS NULL",
+                (revoked_at, share_id),
+            )
+        return cursor.rowcount == 1
 
     def add_invite(
         self,

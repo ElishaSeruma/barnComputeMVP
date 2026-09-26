@@ -44,8 +44,10 @@ from ..models import (
     EnrolmentResult,
     EnrolmentStatus,
     EnrolmentSubmission,
+    FileShare,
     Heartbeat,
     NodeStatus,
+    TransferGrant,
 )
 from ..node.service import canonical_enrolment_proof
 from .repository import CoordinatorRepository
@@ -108,6 +110,30 @@ def _secret_digest(value: str) -> bytes:
 
 def _utc(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(UTC)
+
+
+def canonical_transfer_grant(
+    grant_id: UUID,
+    share_id: UUID,
+    transfer_id: UUID,
+    file_id: UUID,
+    source_node_id: UUID,
+    recipient_node_id: UUID,
+    issued_at: datetime,
+    expires_at: datetime,
+) -> bytes:
+    payload = {
+        "domain": "barn-transfer-grant-v1",
+        "grant_id": str(grant_id),
+        "share_id": str(share_id),
+        "transfer_id": str(transfer_id),
+        "file_id": str(file_id),
+        "source_node_id": str(source_node_id),
+        "recipient_node_id": str(recipient_node_id),
+        "issued_at": issued_at.isoformat().replace("+00:00", "Z"),
+        "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 class CoordinatorService:
@@ -544,6 +570,129 @@ class CoordinatorService:
                 )
             )
         return result
+
+    def create_share(
+        self,
+        file_id: UUID,
+        source_node_id: UUID,
+        recipient_node_id: UUID,
+        ttl: timedelta,
+        *,
+        now: datetime | None = None,
+    ) -> FileShare:
+        created_at = now or datetime.now(UTC)
+        if ttl <= timedelta(0) or ttl > timedelta(days=30):
+            raise BarnError(
+                ErrorCode.INVALID_REQUEST, "Share TTL must be between 1 second and 30 days"
+            )
+        expires_at = created_at + ttl
+        if source_node_id == recipient_node_id:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Share recipient must be another node")
+        with CoordinatorRepository(self.database_path) as repository:
+            source = repository.get_node(str(source_node_id))
+            recipient = repository.get_node(str(recipient_node_id))
+            if source is None or source["status"] == NodeStatus.REVOKED:
+                raise BarnError(
+                    ErrorCode.NOT_AUTHORISED, "Source node is not an active Barn member"
+                )
+            if recipient is None or recipient["status"] == NodeStatus.REVOKED:
+                raise BarnError(
+                    ErrorCode.NOT_AUTHORISED, "Recipient node is not an active Barn member"
+                )
+            share = FileShare(
+                share_id=uuid4(),
+                file_id=file_id,
+                source_node_id=source_node_id,
+                recipient_node_id=recipient_node_id,
+                created_at=created_at,
+                expires_at=expires_at,
+            )
+            repository.add_share(
+                share_id=str(share.share_id),
+                file_id=str(file_id),
+                source_node_id=str(source_node_id),
+                recipient_node_id=str(recipient_node_id),
+                created_at=created_at.isoformat(),
+                expires_at=expires_at.isoformat(),
+            )
+        return share
+
+    def list_shares(self, *, recipient_node_id: UUID | None = None) -> list[FileShare]:
+        self.load_metadata()
+        with CoordinatorRepository(self.database_path) as repository:
+            rows = repository.list_shares(
+                recipient_node_id=str(recipient_node_id) if recipient_node_id else None
+            )
+        return [
+            FileShare(
+                share_id=row["share_id"],
+                file_id=row["file_id"],
+                source_node_id=row["source_node_id"],
+                recipient_node_id=row["recipient_node_id"],
+                created_at=_utc(row["created_at"]),
+                expires_at=_utc(row["expires_at"]),
+                revoked_at=_utc(row["revoked_at"]) if row["revoked_at"] else None,
+            )
+            for row in rows
+        ]
+
+    def revoke_share(self, share_id: UUID, *, now: datetime | None = None) -> None:
+        self.load_metadata()
+        revoked_at = now or datetime.now(UTC)
+        with CoordinatorRepository(self.database_path) as repository:
+            if not repository.revoke_share(str(share_id), revoked_at.isoformat()):
+                raise BarnError(
+                    ErrorCode.INVALID_REQUEST, "Share is unavailable or already revoked"
+                )
+
+    def issue_transfer_grant(
+        self,
+        share_id: UUID,
+        recipient_node_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> TransferGrant:
+        issued_at = now or datetime.now(UTC)
+        with CoordinatorRepository(self.database_path) as repository:
+            row = repository.get_share(str(share_id))
+            if row is None:
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Share is unavailable")
+            if row["recipient_node_id"] != str(recipient_node_id):
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Share is addressed to another node")
+            if row["revoked_at"] or issued_at >= _utc(row["expires_at"]):
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Share is expired or revoked")
+            recipient = repository.get_node(str(recipient_node_id))
+            if recipient is None or recipient["status"] == NodeStatus.REVOKED:
+                raise BarnError(
+                    ErrorCode.NOT_AUTHORISED,
+                    "Recipient node is not an active Barn member",
+                )
+        expires_at = min(_utc(row["expires_at"]), issued_at + timedelta(minutes=5))
+        grant_id = uuid4()
+        transfer_id = uuid4()
+        signature = load_private_identity(self.state_dir / "secrets" / "grant-key.pem").sign(
+            canonical_transfer_grant(
+                grant_id,
+                share_id,
+                transfer_id,
+                UUID(row["file_id"]),
+                UUID(row["source_node_id"]),
+                recipient_node_id,
+                issued_at,
+                expires_at,
+            )
+        )
+        return TransferGrant(
+            grant_id=grant_id,
+            share_id=share_id,
+            transfer_id=transfer_id,
+            file_id=row["file_id"],
+            source_node_id=row["source_node_id"],
+            recipient_node_id=recipient_node_id,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            signature=signature,
+        )
 
     @staticmethod
     def _result_from_row(

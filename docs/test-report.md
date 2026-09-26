@@ -13,6 +13,11 @@ Physical matrix F01-F24: NOT RUN
 SHA-256 Mac-to-Windows: NOT RUN
 SHA-256 Windows-to-Mac: NOT RUN
 Measured resume behaviour, memory, network failures: NOT RUN
-Known issues and blocking defects: shares, file transfer, and relay implementation remain incomplete; physical network integration and full M1 security verification remain outstanding
+Known issues and blocking defects: peer file transfer, share HTTP/CLI surfaces, and relay implementation remain incomplete; physical network integration and full M1 security verification remain outstanding
 Release verdict: NOT YET RUN
 Human reviewer and UTC date: NOT RUN
+
+Share/grant authority checkpoint: Windows PASS on 2026-09-26 with Ruff PASS,
+52 tests PASS, and 80% coverage. Coverage includes durable recipient-scoped
+shares, expiry, revocation, recipient binding, and signed five-minute transfer
+grants. Peer transfer and relay behavior remain NOT RUN.

@@ -111,6 +111,18 @@ the full suite passes with 50 tests and 80% coverage.
 This checkpoint does not include shares, peer serving, transfer sessions,
 resume journals, or relay transport.
 
+### Share and grant checkpoint
+
+The recipient-scoped share and transfer-grant authority slice is complete on
+Windows as of 2026-09-26. It provides durable share records, approved-node
+authorization, bounded one-second-to-30-day expiry, revocation, recipient
+binding, five-minute transfer grants, and Ed25519 signatures over the complete
+grant scope. Ruff passes and the full suite passes with 52 tests and 80%
+coverage.
+
+Peer HTTPS serving, share HTTP/CLI surfaces, chunk transfer, resume journals,
+and relay transport remain separate stages.
+
 ### Current Windows checkpoint
 
 The coordinator/node transport slice is implemented on Windows. It includes
@@ -125,8 +137,8 @@ persistence-first implementation.
 
 1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
    record the evidence under `docs/mac_test_results`.
-2. **Next implementation:** recipient-scoped shares and transfer grants.
-3. Peer HTTPS, resumable chunk transfer, and final integrity.
+2. **Next implementation:** peer HTTPS share delivery and transfer sessions.
+3. Resumable chunk journals, final integrity, and export.
 4. Secure outbound-only relay transport and direct-to-relay failover.
 5. Complete automated security and packaging gates.
 6. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.

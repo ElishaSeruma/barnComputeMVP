@@ -108,6 +108,27 @@ class FileManifest(StrictModel):
         return value
 
 
+class FileShare(StrictModel):
+    share_id: UUID
+    file_id: UUID
+    source_node_id: UUID
+    recipient_node_id: UUID
+    created_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None = None
+
+
+class TransferGrant(StrictModel):
+    grant_id: UUID
+    share_id: UUID
+    transfer_id: UUID
+    file_id: UUID
+    source_node_id: UUID
+    recipient_node_id: UUID
+    issued_at: datetime
+    expires_at: datetime
+    signature: bytes = Field(min_length=64, max_length=64)
+
 class Heartbeat(StrictModel):
     protocol_version: str = PROTOCOL_VERSION
     node_id: UUID
