@@ -6,8 +6,9 @@ share/grant authority and grant-authenticated peer manifest/chunk routes are
 implemented; durable recipient transfer journals, resume, assembly, and safe
 export, authenticated share control-plane routes, live download orchestration,
 and fail-closed transport selection are implemented; signed WSS relay
-admission and an encrypted inner-session envelope are implemented, while
-binding the handshake to node certificate identity remains pending.
+admission and an encrypted inner-session envelope are implemented. The inner
+hello now binds the ephemeral key to the node identity and transcript; relay
+deployment and physical failover remain pending.
 
 ## Enrolment HTTP routes
 

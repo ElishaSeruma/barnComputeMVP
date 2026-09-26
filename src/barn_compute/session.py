@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
+from uuid import UUID
 
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -29,6 +32,50 @@ class SessionKeyPair:
             info=b"barn-inner-session-v1" + transcript,
         ).derive(shared)
         return SessionCipher(key)
+
+
+@dataclass(frozen=True)
+class SessionHello:
+    node_id: UUID
+    ephemeral_public_key: bytes
+    signature: bytes
+
+
+def _handshake_bytes(node_id: UUID, ephemeral_public_key: bytes, transcript: bytes) -> bytes:
+    return json.dumps(
+        {
+            "domain": "barn-inner-session-hello-v1",
+            "node_id": str(node_id),
+            "ephemeral_public_key": ephemeral_public_key.hex(),
+            "transcript": transcript.hex(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def create_session_hello(
+    node_id: UUID,
+    session_key_pair: SessionKeyPair,
+    identity_key: Ed25519PrivateKey,
+    *,
+    transcript: bytes = b"",
+) -> SessionHello:
+    ephemeral_public_key = session_key_pair.public_bytes()
+    signature = identity_key.sign(_handshake_bytes(node_id, ephemeral_public_key, transcript))
+    return SessionHello(node_id, ephemeral_public_key, signature)
+
+
+def verify_session_hello(
+    hello: SessionHello,
+    identity_public_key: Ed25519PublicKey,
+    *,
+    transcript: bytes = b"",
+) -> None:
+    identity_public_key.verify(
+        hello.signature,
+        _handshake_bytes(hello.node_id, hello.ephemeral_public_key, transcript),
+    )
 
 
 @dataclass

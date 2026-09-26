@@ -203,6 +203,14 @@ Binding the session handshake to node certificate identity, production relay
 deployment, physical failover, and full cross-platform security verification
 remain pending.
 
+### Identity-bound inner handshake checkpoint
+
+The inner session hello now binds the node UUID and ephemeral X25519 public key
+to the enrolled Ed25519 identity signature and negotiated transcript. Receivers
+reject a different identity or transcript before deriving the encrypted
+session. Ruff passes and the Windows suite passes with 63 tests. macOS must
+rerun the full suite before this checkpoint is accepted cross-platform.
+
 ### Current Windows checkpoint
 
 The coordinator/node transport slice is implemented on Windows. It includes
@@ -217,6 +225,9 @@ persistence-first implementation.
 
 1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
    record the evidence under `docs/mac_test_results`.
-2. Production relay deployment and physical direct-to-relay failover.
-3. Complete automated security and packaging gates.
-4. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.
+2. **Verification gate:** rerun the full suite on Apple Silicon for the
+   identity-bound inner handshake and record evidence under
+   `docs/mac_test_results`.
+3. Production relay deployment and physical direct-to-relay failover.
+4. Complete automated security and packaging gates.
+5. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.

@@ -90,3 +90,9 @@ the authenticated relay-ticket retrieval endpoint and X25519/HKDF/
 ChaCha20-Poly1305 envelope round-trip with associated-data rejection. The
 session handshake is not yet bound to node certificate identity, and physical
 relay failover remains NOT RUN.
+
+Identity-bound inner handshake checkpoint: Windows PASS on 2026-09-26 with
+Ruff PASS and 63 tests PASS. Session hellos sign the node UUID, ephemeral
+X25519 public key, and transcript with the enrolled Ed25519 identity; forged
+identity and transcript cases are rejected. macOS verification is pending and
+must be recorded before this checkpoint is marked cross-platform complete.

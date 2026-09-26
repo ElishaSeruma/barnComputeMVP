@@ -4,20 +4,25 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from cryptography.exceptions import InvalidTag
+from cryptography.exceptions import InvalidSignature, InvalidTag
 from fastapi.testclient import TestClient
 
 from barn_compute.api_models import encode_binary
 from barn_compute.coordinator.admin import create_admin_app
 from barn_compute.coordinator.service import CoordinatorService
-from barn_compute.crypto import load_private_identity, load_public_key, public_key_bytes
+from barn_compute.crypto import (
+    generate_identity,
+    load_private_identity,
+    load_public_key,
+    public_key_bytes,
+)
 from barn_compute.errors import BarnError, ErrorCode
 from barn_compute.grants import canonical_transfer_grant
 from barn_compute.node.app import create_peer_app
 from barn_compute.node.client import PeerClient
 from barn_compute.node.service import NodeService
 from barn_compute.relay import create_relay_app
-from barn_compute.session import SessionKeyPair
+from barn_compute.session import SessionKeyPair, create_session_hello, verify_session_hello
 
 
 def approved_nodes(tmp_path):
@@ -256,3 +261,19 @@ def test_admin_relay_ticket_surface_and_inner_session_encryption(tmp_path) -> No
     assert right_cipher.open(envelope, associated_data=b"frame-1") == b"private relay payload"
     with pytest.raises(InvalidTag):
         right_cipher.open(envelope, associated_data=b"tampered")
+
+
+def test_inner_session_hello_binds_node_identity_and_ephemeral_key() -> None:
+    node_id = uuid4()
+    identity = generate_identity()
+    session_key_pair = SessionKeyPair.generate()
+    hello = create_session_hello(
+        node_id, session_key_pair, identity, transcript=b"ticket-and-peer"
+    )
+    verify_session_hello(hello, identity.public_key(), transcript=b"ticket-and-peer")
+    with pytest.raises(InvalidSignature):
+        verify_session_hello(
+            hello, generate_identity().public_key(), transcript=b"ticket-and-peer"
+        )
+    with pytest.raises(InvalidSignature):
+        verify_session_hello(hello, identity.public_key(), transcript=b"different")
