@@ -6,6 +6,7 @@ import json
 import re
 from datetime import timedelta
 from pathlib import Path
+from uuid import UUID
 
 import typer
 
@@ -293,7 +294,7 @@ for command_name in ("revoke",):
 
 for child_app, names in (
     (file_app, ("add", "list")),
-    (share_app, ("create", "inbox", "list", "fetch", "revoke")),
+    (share_app, ("inbox", "fetch")),
     (transfer_app, ("list", "status", "resume", "cancel")),
     (relay_app, ("serve",)),
 ):
@@ -342,6 +343,49 @@ def file_list(
             f"{manifest.file_id}  {manifest.display_name}  "
             f"{manifest.size}  {manifest.sha256}"
         )
+
+
+@share_app.command("create")
+def share_create(
+    file_id: str,
+    to: str = typer.Option(..., "--to"),
+    ttl: str = typer.Option("30m", "--ttl"),
+    admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    node = _node_service(state_dir)
+    metadata = node.load_metadata()
+    with _admin_client(state_dir, admin_url) as client:
+        share = client.create_share(
+            UUID(file_id), metadata.node_id, UUID(to), _parse_duration(ttl)
+        )
+    typer.echo(f"Share ID: {share['share_id']}")
+    typer.echo(f"Expires at: {share['expires_at']}")
+
+
+@share_app.command("list")
+def share_list(
+    admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    with _admin_client(state_dir, admin_url) as client:
+        shares = client.list_shares()
+    for share in shares:
+        typer.echo(
+            f"{share['share_id']}  {share['file_id']}  {share['recipient_node_id']}  "
+            f"{share['expires_at']}"
+        )
+
+
+@share_app.command("revoke")
+def share_revoke(
+    share_id: str,
+    admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    with _admin_client(state_dir, admin_url) as client:
+        client.revoke_share(UUID(share_id))
+    typer.echo(f"Revoked share {share_id}")
 
 
 @app.command("nodes")

@@ -146,6 +146,16 @@ operation. Ruff passes and the full suite passes with 54 tests and 80% coverage.
 The remaining gaps are share HTTP/CLI surfaces, live network download
 orchestration, cancellation, and relay transport.
 
+### Share control-plane checkpoint
+
+The share control-plane surface is complete on Windows as of 2026-09-26. The
+loopback admin API and CLI now support authenticated share creation, listing,
+revocation, and signed transfer-grant issuance. Ruff passes and the full suite
+passes with 55 tests and 79% coverage.
+
+Live download orchestration, cancellation, and relay transport remain outside
+this checkpoint.
+
 ### Current Windows checkpoint
 
 The coordinator/node transport slice is implemented on Windows. It includes
@@ -160,7 +170,7 @@ persistence-first implementation.
 
 1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
    record the evidence under `docs/mac_test_results`.
-2. **Next implementation:** share HTTP/CLI surfaces and live download orchestration.
-3. Cancellation, relay transport, and direct-to-relay failover.
+2. **Next implementation:** live download orchestration and cancellation.
+3. Relay transport and direct-to-relay failover.
 4. Complete automated security and packaging gates.
 5. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.

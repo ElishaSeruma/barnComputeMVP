@@ -5,16 +5,21 @@ from __future__ import annotations
 import secrets
 from dataclasses import asdict
 from datetime import timedelta
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header
 
 from .. import __version__
 from ..api_models import (
+    GrantResponse,
     InviteRequest,
     InviteResponse,
     PendingResponse,
     ResultResponse,
+    ShareCreateRequest,
+    ShareResponse,
     StatusResponse,
+    encode_binary,
 )
 from ..errors import BarnError, ErrorCode
 from ..http_common import install_http_safety
@@ -72,5 +77,42 @@ def create_admin_app(service: CoordinatorService, admin_token: str) -> FastAPI:
         _admin: None = Depends(require_admin),
     ) -> None:
         service.reject_enrolment(request_id)
+
+    @app.post("/local/v1/shares", response_model=ShareResponse)
+    async def create_share(
+        request: ShareCreateRequest,
+        _admin: None = Depends(require_admin),
+    ) -> ShareResponse:
+        share = service.create_share(
+            request.file_id,
+            request.source_node_id,
+            request.recipient_node_id,
+            timedelta(seconds=request.ttl_seconds),
+        )
+        return ShareResponse(**share.model_dump())
+
+    @app.get("/local/v1/shares", response_model=list[ShareResponse])
+    async def list_shares(_admin: None = Depends(require_admin)) -> list[ShareResponse]:
+        return [ShareResponse(**share.model_dump()) for share in service.list_shares()]
+
+    @app.post("/local/v1/shares/{share_id}/revoke", status_code=204)
+    async def revoke_share(
+        share_id: str,
+        _admin: None = Depends(require_admin),
+    ) -> None:
+        service.revoke_share(UUID(share_id))
+
+    @app.post("/local/v1/shares/{share_id}/grant", response_model=GrantResponse)
+    async def issue_grant(
+        share_id: str,
+        recipient_node_id: str,
+        _admin: None = Depends(require_admin),
+    ) -> GrantResponse:
+        grant = service.issue_transfer_grant(
+            UUID(share_id), UUID(recipient_node_id)
+        )
+        return GrantResponse(
+            **grant.model_dump(exclude={"signature"}), signature=encode_binary(grant.signature)
+        )
 
     return app

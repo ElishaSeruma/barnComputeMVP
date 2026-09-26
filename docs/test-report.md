@@ -42,3 +42,8 @@ persistence, restart reuse, full-file assembly and SHA-256 verification, and
 no-clobber export. Detailed macOS evidence is in
 `docs/mac_test_results/2026-09-26-transfer-journals.md`. Live download
 orchestration, cancellation, and relay behavior remain NOT RUN.
+
+Share control-plane checkpoint: Windows PASS on 2026-09-26 with Ruff PASS, 55
+tests PASS, and 79% coverage. Coverage includes authenticated loopback share
+creation, listing, revocation, and signed transfer-grant issuance. Live
+download orchestration, cancellation, and relay behavior remain NOT RUN.

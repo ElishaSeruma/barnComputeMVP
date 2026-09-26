@@ -108,4 +108,33 @@ class RegistryResponse(StrictModel):
     nodes: list[NodeRecordResponse]
 
 
+class ShareCreateRequest(StrictModel):
+    file_id: UUID
+    source_node_id: UUID
+    recipient_node_id: UUID
+    ttl_seconds: int = Field(ge=1, le=30 * 24 * 60 * 60)
+
+
+class ShareResponse(StrictModel):
+    share_id: UUID
+    file_id: UUID
+    source_node_id: UUID
+    recipient_node_id: UUID
+    created_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None = None
+
+
+class GrantResponse(StrictModel):
+    grant_id: UUID
+    share_id: UUID
+    transfer_id: UUID
+    file_id: UUID
+    source_node_id: UUID
+    recipient_node_id: UUID
+    issued_at: datetime
+    expires_at: datetime
+    signature: str
+
+
 HeartbeatRequest = Heartbeat

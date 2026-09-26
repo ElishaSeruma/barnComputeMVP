@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from pathlib import Path
+from uuid import UUID
 
 import httpx
 
@@ -79,3 +80,38 @@ class CoordinatorAdminClient:
     def reject(self, request_id: str) -> None:
         response = self._request("POST", f"/local/v1/enrolments/{request_id}/reject")
         self._payload(response)
+
+    def create_share(
+        self,
+        file_id: UUID,
+        source_node_id: UUID,
+        recipient_node_id: UUID,
+        ttl: timedelta,
+    ) -> dict[str, object]:
+        response = self._request(
+            "POST",
+            "/local/v1/shares",
+            json={
+                "file_id": str(file_id),
+                "source_node_id": str(source_node_id),
+                "recipient_node_id": str(recipient_node_id),
+                "ttl_seconds": int(ttl.total_seconds()),
+            },
+        )
+        return dict(self._payload(response))
+
+    def list_shares(self) -> list[dict[str, object]]:
+        response = self._request("GET", "/local/v1/shares")
+        return list(self._payload(response))
+
+    def revoke_share(self, share_id: UUID) -> None:
+        response = self._request("POST", f"/local/v1/shares/{share_id}/revoke")
+        self._payload(response)
+
+    def issue_grant(self, share_id: UUID, recipient_node_id: UUID) -> dict[str, object]:
+        response = self._request(
+            "POST",
+            f"/local/v1/shares/{share_id}/grant",
+            params={"recipient_node_id": str(recipient_node_id)},
+        )
+        return dict(self._payload(response))

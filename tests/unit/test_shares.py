@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from barn_compute.api_models import encode_binary
+from barn_compute.coordinator.admin import create_admin_app
 from barn_compute.coordinator.service import CoordinatorService
 from barn_compute.crypto import load_private_identity, load_public_key, public_key_bytes
 from barn_compute.errors import BarnError, ErrorCode
@@ -153,3 +154,29 @@ def test_recipient_journal_resumes_and_exports_without_clobbering(tmp_path) -> N
     with pytest.raises(BarnError) as error:
         recipient.export_transfer(grant, manifest, destination)
     assert error.value.code is ErrorCode.CONFIGURATION
+
+
+def test_admin_share_surface_requires_bearer_and_issues_grant(tmp_path) -> None:
+    coordinator, (source, recipient) = approved_nodes(tmp_path)
+    token = (coordinator.state_dir / "secrets" / "admin.token").read_text(encoding="ascii").strip()
+    client = TestClient(create_admin_app(coordinator, token))
+    manifest_id = uuid4()
+    body = {
+        "file_id": str(manifest_id),
+        "source_node_id": str(source.load_metadata().node_id),
+        "recipient_node_id": str(recipient.load_metadata().node_id),
+        "ttl_seconds": 600,
+    }
+    assert client.post("/local/v1/shares", json=body).status_code == 401
+    response = client.post(
+        "/local/v1/shares", json=body, headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    share_id = response.json()["share_id"]
+    grant = client.post(
+        f"/local/v1/shares/{share_id}/grant",
+        params={"recipient_node_id": str(recipient.load_metadata().node_id)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert grant.status_code == 200
+    assert grant.json()["signature"]
