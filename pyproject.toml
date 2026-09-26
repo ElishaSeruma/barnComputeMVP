@@ -43,7 +43,7 @@ dev = [
 barn = "barn_compute.cli:main"
 
 [project.urls]
-Repository = "https://github.com/barncompute/barncompute"
+Repository = "https://github.com/ElishaSeruma/barnComputeMVP"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/barn_compute"]
