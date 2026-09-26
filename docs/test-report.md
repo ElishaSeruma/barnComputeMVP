@@ -67,3 +67,9 @@ selection plus direct-to-relay fallback rules. Detailed macOS evidence is in
 `docs/mac_test_results/2026-09-26-relay-policy.md`. A deployed WSS relay,
 admission protocol, inner protected session, and physical relay failover remain
 NOT RUN.
+
+Relay admission checkpoint: Windows PASS on 2026-09-26 with Ruff PASS, 61 tests
+PASS, and 79% coverage. Coverage includes signed five-minute ticket issuance,
+WSS admission validation, peer scoping, opaque 1 MiB frame bounds, and relay
+failure behavior. Inner protected sessions, production deployment, ticket
+retrieval surfaces, and physical failover remain NOT RUN.

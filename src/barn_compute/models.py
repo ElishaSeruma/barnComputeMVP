@@ -136,6 +136,16 @@ class TransferJournal(StrictModel):
     manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     completed_chunks: tuple[int, ...] = ()
 
+
+class RelayTicket(StrictModel):
+    ticket_id: UUID
+    barn_id: UUID
+    source_node_id: UUID
+    recipient_node_id: UUID
+    issued_at: datetime
+    expires_at: datetime
+    signature: bytes = Field(min_length=64, max_length=64)
+
 class Heartbeat(StrictModel):
     protocol_version: str = PROTOCOL_VERSION
     node_id: UUID

@@ -15,6 +15,7 @@ from barn_compute.grants import canonical_transfer_grant
 from barn_compute.node.app import create_peer_app
 from barn_compute.node.client import PeerClient
 from barn_compute.node.service import NodeService
+from barn_compute.relay import create_relay_app
 
 
 def approved_nodes(tmp_path):
@@ -210,3 +211,23 @@ def test_peer_client_orchestrates_journaled_download(tmp_path) -> None:
     with PeerClient("http://peer", tmp_path / "unused-ca.pem", transport=transport) as peer:
         destination = peer.download(recipient, grant_payload, tmp_path / "downloaded.bin")
     assert destination.read_bytes() == b"download me"
+
+
+def test_relay_ticket_admission_is_signed_short_lived_and_peer_scoped(tmp_path) -> None:
+    coordinator, (source, recipient) = approved_nodes(tmp_path)
+    ticket = coordinator.issue_relay_ticket(
+        source.load_metadata().node_id, recipient.load_metadata().node_id
+    )
+    payload = {
+        key: (encode_binary(value) if key == "signature" else str(value))
+        for key, value in ticket.model_dump().items()
+    }
+    public_key = public_key_bytes(
+        load_private_identity(coordinator.state_dir / "secrets" / "grant-key.pem").public_key()
+    )
+    client = TestClient(create_relay_app(public_key))
+    with client.websocket_connect("/v1/tunnel") as websocket:
+        websocket.send_json(
+            {"node_id": str(source.load_metadata().node_id), "ticket": payload}
+        )
+        assert websocket.receive_json()["type"] == "admitted"

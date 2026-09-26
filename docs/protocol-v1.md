@@ -5,8 +5,8 @@ implemented; heartbeat and registry routes, local immutable file import, and
 share/grant authority and grant-authenticated peer manifest/chunk routes are
 implemented; durable recipient transfer journals, resume, assembly, and safe
 export, authenticated share control-plane routes, live download orchestration,
-and fail-closed transport selection are implemented; WSS relay routes remain
-pending.
+and fail-closed transport selection are implemented; signed WSS relay
+admission is implemented, while inner protected relay sessions remain pending.
 
 ## Enrolment HTTP routes
 

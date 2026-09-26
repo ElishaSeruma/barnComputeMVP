@@ -37,7 +37,7 @@ from ..crypto import (
     save_private_identity,
 )
 from ..errors import BarnError, ErrorCode
-from ..grants import canonical_transfer_grant
+from ..grants import canonical_relay_ticket, canonical_transfer_grant
 from ..models import (
     PROTOCOL_VERSION,
     EnrolmentChallenge,
@@ -48,6 +48,7 @@ from ..models import (
     FileShare,
     Heartbeat,
     NodeStatus,
+    RelayTicket,
     TransferGrant,
 )
 from ..node.service import canonical_enrolment_proof
@@ -665,6 +666,49 @@ class CoordinatorService:
             transfer_id=transfer_id,
             file_id=row["file_id"],
             source_node_id=row["source_node_id"],
+            recipient_node_id=recipient_node_id,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            signature=signature,
+        )
+
+    def issue_relay_ticket(
+        self,
+        source_node_id: UUID,
+        recipient_node_id: UUID,
+        *,
+        ttl: timedelta = timedelta(minutes=5),
+        now: datetime | None = None,
+    ) -> RelayTicket:
+        issued_at = now or datetime.now(UTC)
+        if ttl <= timedelta(0) or ttl > timedelta(minutes=5):
+            raise BarnError(
+                ErrorCode.INVALID_REQUEST,
+                "Relay ticket TTL must be between 1 second and 5 minutes",
+            )
+        metadata = self.load_metadata()
+        if source_node_id == recipient_node_id:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Relay peers must be different nodes")
+        with CoordinatorRepository(self.database_path) as repository:
+            for node_id in (source_node_id, recipient_node_id):
+                node = repository.get_node(str(node_id))
+                if node is None or node["status"] == NodeStatus.REVOKED:
+                    raise BarnError(
+                        ErrorCode.NOT_AUTHORISED,
+                        "Relay peer is not an active Barn member",
+                    )
+        expires_at = issued_at + ttl
+        ticket_id = uuid4()
+        signature = load_private_identity(self.state_dir / "secrets" / "grant-key.pem").sign(
+            canonical_relay_ticket(
+                ticket_id, metadata.barn_id, source_node_id, recipient_node_id,
+                issued_at, expires_at,
+            )
+        )
+        return RelayTicket(
+            ticket_id=ticket_id,
+            barn_id=metadata.barn_id,
+            source_node_id=source_node_id,
             recipient_node_id=recipient_node_id,
             issued_at=issued_at,
             expires_at=expires_at,

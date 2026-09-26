@@ -179,6 +179,18 @@ while forced modes fail closed. The policy is covered by 60 passing tests at
 The separately deployed WSS relay service, admission tickets, inner protected
 peer sessions, and physical relay failover remain pending.
 
+### Relay admission checkpoint
+
+The signed relay-admission slice is complete on Windows as of 2026-09-26.
+Coordinators issue five-minute, Barn-scoped tickets; the relay validates the
+grant-key signature, expiry, and peer membership before admitting a WSS
+connection. Opaque frames are bounded to 1 MiB and routed only to the ticket's
+peer; the relay has no file-grant authority. Ruff passes and the full suite
+passes with 61 tests and 79% coverage.
+
+Inner authenticated/encrypted peer sessions, production relay deployment,
+ticket retrieval surfaces, and physical failover remain pending.
+
 ### Current Windows checkpoint
 
 The coordinator/node transport slice is implemented on Windows. It includes
@@ -193,8 +205,8 @@ persistence-first implementation.
 
 1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
    record the evidence under `docs/mac_test_results`.
-2. **Next implementation:** the separately deployed WSS relay service and
-   admission protocol.
-3. Inner protected peer sessions and physical direct-to-relay failover.
+2. **Next implementation:** inner authenticated/encrypted peer sessions and
+   relay ticket retrieval surfaces.
+3. Production relay deployment and physical direct-to-relay failover.
 4. Complete automated security and packaging gates.
 5. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.
