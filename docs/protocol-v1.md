@@ -1,8 +1,8 @@
 # Protocol v1
 
 Status: partial. Enrolment HTTP routes and the signed-request envelope are
-implemented; heartbeat and registry routes are implemented; file, share,
-transfer, and relay routes remain pending.
+implemented; heartbeat and registry routes plus local immutable file import are
+implemented; share, transfer, and relay routes remain pending.
 
 ## Enrolment HTTP routes
 

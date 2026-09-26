@@ -99,6 +99,18 @@ registry refresh, and local node listing.
 The remaining release gates are cross-platform verification, physical
 two-node acceptance, managed-file transfer, and relay behavior.
 
+### Managed-file import checkpoint
+
+The immutable managed-file import slice is complete on Windows as of
+2026-09-26. It provides private UUID-addressed storage, atomic staging-copy
+imports, fixed 1 MiB chunk manifests, whole-file and per-chunk SHA-256 hashes,
+zero-byte file support, the 512 MiB size limit, free-space checks, manifest
+validation, and `barn file add` / `barn file list` commands. Ruff passes and
+the full suite passes with 50 tests and 80% coverage.
+
+This checkpoint does not include shares, peer serving, transfer sessions,
+resume journals, or relay transport.
+
 ### Current Windows checkpoint
 
 The coordinator/node transport slice is implemented on Windows. It includes
@@ -113,8 +125,8 @@ persistence-first implementation.
 
 1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
    record the evidence under `docs/mac_test_results`.
-2. **Next implementation:** immutable managed-file import and manifests.
-3. Shares, grants, peer HTTPS, resumable chunk transfer, and final integrity.
+2. **Next implementation:** recipient-scoped shares and transfer grants.
+3. Peer HTTPS, resumable chunk transfer, and final integrity.
 4. Secure outbound-only relay transport and direct-to-relay failover.
 5. Complete automated security and packaging gates.
 6. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.

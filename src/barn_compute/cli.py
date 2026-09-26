@@ -321,6 +321,29 @@ def doctor(as_json: bool = typer.Option(False, "--json")) -> None:
             typer.echo(f"{key}={value}")
 
 
+@file_app.command("add")
+def file_add(
+    source: Path,
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    manifest = _node_service(state_dir).import_file(source)
+    typer.echo(f"File ID: {manifest.file_id}")
+    typer.echo(f"Name: {manifest.display_name}")
+    typer.echo(f"Size: {manifest.size}")
+    typer.echo(f"SHA-256: {manifest.sha256}")
+
+
+@file_app.command("list")
+def file_list(
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    for manifest in _node_service(state_dir).list_files():
+        typer.echo(
+            f"{manifest.file_id}  {manifest.display_name}  "
+            f"{manifest.size}  {manifest.sha256}"
+        )
+
+
 @app.command("nodes")
 def nodes(
     state_dir: Path | None = typer.Option(None, "--state-dir"),

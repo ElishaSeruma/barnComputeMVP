@@ -32,11 +32,15 @@ from ..crypto import (
 )
 from ..errors import BarnError, ErrorCode
 from ..models import (
+    CHUNK_SIZE,
+    MAX_FILE_SIZE,
     PROTOCOL_VERSION,
+    ChunkManifest,
     EnrolmentChallenge,
     EnrolmentResult,
     EnrolmentStatus,
     EnrolmentSubmission,
+    FileManifest,
     Heartbeat,
     NodeStatus,
 )
@@ -320,3 +324,87 @@ class NodeService:
 
     def store_registry(self, payload: dict[str, object]) -> None:
         write_private_json(self.state_dir / "registry.json", payload)
+
+    def import_file(self, source: Path) -> FileManifest:
+        source = source.expanduser()
+        if source.is_symlink() or not source.is_file():
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Source must be a regular file")
+        try:
+            source = source.resolve(strict=True)
+            size = source.stat().st_size
+        except OSError as exc:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Source file is unavailable") from exc
+        if size > MAX_FILE_SIZE:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "File exceeds the 512 MiB maximum")
+
+        metadata = self.load_metadata()
+        managed_dir = ensure_private_directory(self.state_dir / "managed")
+        file_id = uuid4()
+        file_dir = managed_dir / str(file_id)
+        staging_path = managed_dir / f".{file_id}.staging"
+        chunks: list[ChunkManifest] = []
+        file_hash = hashlib.sha256()
+        copied = 0
+        completed = False
+        try:
+            with source.open("rb") as source_handle, staging_path.open("xb") as staged:
+                while True:
+                    chunk = source_handle.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    digest = hashlib.sha256(chunk).hexdigest()
+                    chunks.append(
+                        ChunkManifest(
+                            index=len(chunks),
+                            offset=copied,
+                            length=len(chunk),
+                            sha256=digest,
+                        )
+                    )
+                    staged.write(chunk)
+                    file_hash.update(chunk)
+                    copied += len(chunk)
+                staged.flush()
+                os.fsync(staged.fileno())
+            if copied != size:
+                raise BarnError(ErrorCode.INVALID_REQUEST, "Source changed during import")
+            if shutil.disk_usage(managed_dir).free < copied:
+                raise BarnError(ErrorCode.CONFIGURATION, "Insufficient managed storage")
+            file_dir.mkdir(mode=0o700)
+            os.replace(staging_path, file_dir / "data")
+            manifest = FileManifest(
+                file_id=file_id,
+                owner_node_id=metadata.node_id,
+                display_name=source.name,
+                size=copied,
+                sha256=file_hash.hexdigest(),
+                chunks=tuple(chunks),
+                created_at=datetime.now(UTC),
+            )
+            write_private_json(file_dir / "manifest.json", manifest.model_dump(mode="json"))
+            completed = True
+            return manifest
+        except BarnError:
+            raise
+        except (OSError, ValueError) as exc:
+            raise BarnError(ErrorCode.CONFIGURATION, "Managed file import failed") from exc
+        finally:
+            staging_path.unlink(missing_ok=True)
+            if not completed and file_dir.exists():
+                shutil.rmtree(file_dir)
+
+    def list_files(self) -> list[FileManifest]:
+        managed_dir = self.state_dir / "managed"
+        if not managed_dir.exists():
+            return []
+        manifests: list[FileManifest] = []
+        for manifest_path in sorted(managed_dir.glob("*/manifest.json")):
+            try:
+                manifests.append(
+                    FileManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+                )
+            except (OSError, ValueError) as exc:
+                raise BarnError(
+                    ErrorCode.CONFIGURATION, "Managed file manifest is invalid"
+                ) from exc
+        return manifests
