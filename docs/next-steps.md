@@ -168,6 +168,17 @@ integrity-checked no-clobber export. Ruff passes and the full suite passes with
 Cancellation leaves the durable journal available for a later resume. Relay
 transport and richer cancellation/status controls remain separate work.
 
+### Relay policy checkpoint
+
+The fail-closed transport policy foundation is complete on Windows as of
+2026-09-26. `direct`, `relay`, and `auto` modes now have explicit selection
+rules; `auto` prefers direct HTTPS and may fall back only to a configured relay,
+while forced modes fail closed. The policy is covered by 60 passing tests at
+79% coverage.
+
+The separately deployed WSS relay service, admission tickets, inner protected
+peer sessions, and physical relay failover remain pending.
+
 ### Current Windows checkpoint
 
 The coordinator/node transport slice is implemented on Windows. It includes
@@ -182,6 +193,8 @@ persistence-first implementation.
 
 1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
    record the evidence under `docs/mac_test_results`.
-2. **Next implementation:** relay transport and direct-to-relay failover.
-3. Complete automated security and packaging gates.
-4. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.
+2. **Next implementation:** the separately deployed WSS relay service and
+   admission protocol.
+3. Inner protected peer sessions and physical direct-to-relay failover.
+4. Complete automated security and packaging gates.
+5. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.

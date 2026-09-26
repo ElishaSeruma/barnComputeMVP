@@ -58,3 +58,9 @@ coverage). Coverage includes grant retrieval, CA-verified peer manifest/chunk
 orchestration, journal-backed resume, final integrity, and no-clobber export.
 Detailed macOS evidence is in `docs/mac_test_results/2026-09-26-live-download.md`.
 Relay behavior remains NOT RUN.
+
+Relay policy checkpoint: Windows PASS on 2026-09-26 with Ruff PASS, 60 tests
+PASS, and 79% coverage. Coverage includes fail-closed `direct`, `relay`, and
+`auto` selection plus direct-to-relay fallback rules. A deployed WSS relay,
+admission protocol, inner protected session, and physical relay failover remain
+NOT RUN.
