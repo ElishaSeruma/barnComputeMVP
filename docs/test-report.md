@@ -118,8 +118,13 @@ Full evidence: `WINDOWS_M1_RUNTIME_VERIFICATION.md`. Mac rerun and deployment
 instructions: `M1_ACCEPTANCE_RUNBOOK.md` and
 `mac_instructions/2026-09-26-integrated-m1.md`.
 
-Mac verification of this checkpoint, public relay, physical two-host resource
-measurements and TestPyPI installation provenance remain NOT RUN. Historical
-checkpoint gaps above are superseded by this runtime checkpoint, not evidence
-of physical acceptance. Release verdict remains NOT YET RUN; M1 is not accepted
-until those external gates pass.
+macOS local verification PASS at `842bc31` on 2026-09-26: fresh Python 3.12.14
+environment; Ruff PASS; full local HTTPS/WSS suite PASS (82 tests in 61.56s,
+82% coverage); wheel/sdist build PASS; Twine and archive screening PASS; and
+clean-wheel import/CLI checks PASS. Artifact SHA-256 values and detailed
+evidence are in `docs/mac_test_results/2026-09-26-integrated-m1-acceptance-local.md`.
+
+Public relay, physical two-host resource measurements, and TestPyPI installation
+provenance remain NOT RUN. Historical checkpoint gaps above are superseded by
+this runtime checkpoint, not evidence of physical acceptance. Release verdict
+remains NOT YET RUN; M1 is not accepted until those external gates pass.
