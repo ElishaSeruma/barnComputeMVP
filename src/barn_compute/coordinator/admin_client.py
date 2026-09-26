@@ -115,3 +115,17 @@ class CoordinatorAdminClient:
             params={"recipient_node_id": str(recipient_node_id)},
         )
         return dict(self._payload(response))
+
+    def issue_relay_ticket(
+        self, source_node_id: UUID, recipient_node_id: UUID, ttl: timedelta = timedelta(minutes=5)
+    ) -> dict[str, object]:
+        response = self._request(
+            "POST",
+            "/local/v1/relay/tickets",
+            params={
+                "source_node_id": str(source_node_id),
+                "recipient_node_id": str(recipient_node_id),
+                "ttl_seconds": int(ttl.total_seconds()),
+            },
+        )
+        return dict(self._payload(response))

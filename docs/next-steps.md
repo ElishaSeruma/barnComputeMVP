@@ -191,6 +191,18 @@ passes with 61 tests and 79% coverage.
 Inner authenticated/encrypted peer sessions, production relay deployment,
 ticket retrieval surfaces, and physical failover remain pending.
 
+### Inner session and ticket retrieval checkpoint
+
+The inner-session foundation is complete on Windows as of 2026-09-26. The
+authenticated control plane can retrieve a five-minute signed relay ticket,
+and peers can derive the same X25519/HKDF session key and protect opaque relay
+frames with ChaCha20-Poly1305 associated data. Ruff passes and the full suite
+passes with 62 tests at 79% coverage.
+
+Binding the session handshake to node certificate identity, production relay
+deployment, physical failover, and full cross-platform security verification
+remain pending.
+
 ### Current Windows checkpoint
 
 The coordinator/node transport slice is implemented on Windows. It includes
@@ -205,8 +217,6 @@ persistence-first implementation.
 
 1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
    record the evidence under `docs/mac_test_results`.
-2. **Next implementation:** inner authenticated/encrypted peer sessions and
-   relay ticket retrieval surfaces.
-3. Production relay deployment and physical direct-to-relay failover.
-4. Complete automated security and packaging gates.
-5. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.
+2. Production relay deployment and physical direct-to-relay failover.
+3. Complete automated security and packaging gates.
+4. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.

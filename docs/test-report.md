@@ -76,3 +76,10 @@ validation, peer scoping, opaque 1 MiB frame bounds, and relay failure behavior.
 Detailed macOS evidence is in `docs/mac_test_results/2026-09-26-relay-admission.md`.
 Inner protected sessions, production deployment, ticket retrieval surfaces, and
 physical failover remain NOT RUN.
+
+Inner session and ticket retrieval checkpoint: Windows PASS on 2026-09-26 with
+Ruff PASS; full suite PASS (62 tests, 79% coverage). Coverage includes the
+authenticated relay-ticket retrieval endpoint and X25519/HKDF/
+ChaCha20-Poly1305 envelope round-trip with associated-data rejection. The
+session handshake is not yet bound to node certificate identity, and physical
+relay failover remains NOT RUN.

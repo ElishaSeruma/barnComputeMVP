@@ -15,6 +15,7 @@ from ..api_models import (
     InviteRequest,
     InviteResponse,
     PendingResponse,
+    RelayTicketResponse,
     ResultResponse,
     ShareCreateRequest,
     ShareResponse,
@@ -113,6 +114,21 @@ def create_admin_app(service: CoordinatorService, admin_token: str) -> FastAPI:
         )
         return GrantResponse(
             **grant.model_dump(exclude={"signature"}), signature=encode_binary(grant.signature)
+        )
+
+    @app.post("/local/v1/relay/tickets", response_model=RelayTicketResponse)
+    async def issue_relay_ticket(
+        source_node_id: str,
+        recipient_node_id: str,
+        ttl_seconds: int = 300,
+        _admin: None = Depends(require_admin),
+    ) -> RelayTicketResponse:
+        ticket = service.issue_relay_ticket(
+            UUID(source_node_id), UUID(recipient_node_id), timedelta(seconds=ttl_seconds)
+        )
+        return RelayTicketResponse(
+            **ticket.model_dump(exclude={"signature"}),
+            signature=encode_binary(ticket.signature),
         )
 
     return app

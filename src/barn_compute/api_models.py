@@ -137,4 +137,14 @@ class GrantResponse(StrictModel):
     signature: str
 
 
+class RelayTicketResponse(StrictModel):
+    ticket_id: UUID
+    barn_id: UUID
+    source_node_id: UUID
+    recipient_node_id: UUID
+    issued_at: datetime
+    expires_at: datetime
+    signature: str
+
+
 HeartbeatRequest = Heartbeat

@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from cryptography.exceptions import InvalidTag
 from fastapi.testclient import TestClient
 
 from barn_compute.api_models import encode_binary
@@ -16,6 +17,7 @@ from barn_compute.node.app import create_peer_app
 from barn_compute.node.client import PeerClient
 from barn_compute.node.service import NodeService
 from barn_compute.relay import create_relay_app
+from barn_compute.session import SessionKeyPair
 
 
 def approved_nodes(tmp_path):
@@ -231,3 +233,26 @@ def test_relay_ticket_admission_is_signed_short_lived_and_peer_scoped(tmp_path) 
             {"node_id": str(source.load_metadata().node_id), "ticket": payload}
         )
         assert websocket.receive_json()["type"] == "admitted"
+
+
+def test_admin_relay_ticket_surface_and_inner_session_encryption(tmp_path) -> None:
+    coordinator, (source, recipient) = approved_nodes(tmp_path)
+    token = (coordinator.state_dir / "secrets" / "admin.token").read_text(encoding="ascii").strip()
+    client = TestClient(create_admin_app(coordinator, token))
+    response = client.post(
+        "/local/v1/relay/tickets",
+        params={
+            "source_node_id": str(source.load_metadata().node_id),
+            "recipient_node_id": str(recipient.load_metadata().node_id),
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["signature"]
+    left, right = SessionKeyPair.generate(), SessionKeyPair.generate()
+    left_cipher = left.derive(right.public_bytes(), transcript=b"ticket")
+    right_cipher = right.derive(left.public_bytes(), transcript=b"ticket")
+    envelope = left_cipher.seal(b"private relay payload", associated_data=b"frame-1")
+    assert right_cipher.open(envelope, associated_data=b"frame-1") == b"private relay payload"
+    with pytest.raises(InvalidTag):
+        right_cipher.open(envelope, associated_data=b"tampered")
