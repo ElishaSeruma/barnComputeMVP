@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -12,6 +13,7 @@ from barn_compute.crypto import load_private_identity, load_public_key, public_k
 from barn_compute.errors import BarnError, ErrorCode
 from barn_compute.grants import canonical_transfer_grant
 from barn_compute.node.app import create_peer_app
+from barn_compute.node.client import PeerClient
 from barn_compute.node.service import NodeService
 
 
@@ -180,3 +182,31 @@ def test_admin_share_surface_requires_bearer_and_issues_grant(tmp_path) -> None:
     )
     assert grant.status_code == 200
     assert grant.json()["signature"]
+
+
+def test_peer_client_orchestrates_journaled_download(tmp_path) -> None:
+    coordinator, (source, recipient) = approved_nodes(tmp_path)
+    source_file = tmp_path / "payload.bin"
+    source_file.write_bytes(b"download me")
+    manifest = source.import_file(source_file)
+    share = coordinator.create_share(
+        manifest.file_id,
+        source.load_metadata().node_id,
+        recipient.load_metadata().node_id,
+        timedelta(minutes=10),
+    )
+    grant = coordinator.issue_transfer_grant(share.share_id, recipient.load_metadata().node_id)
+    grant_payload = {
+        key: (encode_binary(value) if key == "signature" else str(value))
+        for key, value in grant.model_dump().items()
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/manifest"):
+            return httpx.Response(200, json=manifest.model_dump(mode="json"))
+        return httpx.Response(200, content=b"download me")
+
+    transport = httpx.MockTransport(handler)
+    with PeerClient("http://peer", tmp_path / "unused-ca.pem", transport=transport) as peer:
+        destination = peer.download(recipient, grant_payload, tmp_path / "downloaded.bin")
+    assert destination.read_bytes() == b"download me"

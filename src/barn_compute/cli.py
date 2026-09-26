@@ -20,7 +20,7 @@ from .config import (
 from .coordinator.admin_client import CoordinatorAdminClient
 from .coordinator.service import CoordinatorService
 from .errors import BarnError, ErrorCode
-from .node.client import CoordinatorClient
+from .node.client import CoordinatorClient, PeerClient
 from .node.service import NodeService
 from .server import serve_coordinator, serve_node
 
@@ -294,7 +294,7 @@ for command_name in ("revoke",):
 
 for child_app, names in (
     (file_app, ("add", "list")),
-    (share_app, ("inbox", "fetch")),
+    (share_app, ("inbox",)),
     (transfer_app, ("list", "status", "resume", "cancel")),
     (relay_app, ("serve",)),
 ):
@@ -386,6 +386,23 @@ def share_revoke(
     with _admin_client(state_dir, admin_url) as client:
         client.revoke_share(UUID(share_id))
     typer.echo(f"Revoked share {share_id}")
+
+
+@share_app.command("fetch")
+def share_fetch(
+    share_id: str,
+    source: str = typer.Option(..., "--source"),
+    output: Path = typer.Option(..., "--output"),
+    ca_cert: Path = typer.Option(..., "--ca-cert"),
+    admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    node = _node_service(state_dir)
+    with _admin_client(state_dir, admin_url) as admin:
+        grant = admin.issue_grant(UUID(share_id), node.load_metadata().node_id)
+    with PeerClient(source, ca_cert.expanduser().resolve()) as peer:
+        destination = peer.download(node, grant, output)
+    typer.echo(f"Exported file to {destination}")
 
 
 @app.command("nodes")

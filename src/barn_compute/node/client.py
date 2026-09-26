@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -17,6 +18,8 @@ from ..models import (
     EnrolmentReceipt,
     EnrolmentResult,
     EnrolmentStatus,
+    FileManifest,
+    TransferGrant,
 )
 from .service import NodeService
 
@@ -172,3 +175,81 @@ class CoordinatorClient:
         payload = dict(response.json())
         node.store_registry(payload)
         return payload
+
+
+class PeerClient:
+    def __init__(
+        self,
+        base_url: str,
+        ca_certificate: Path,
+        *,
+        timeout: float = 10.0,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        if not base_url.startswith("https://") and transport is None:
+            raise BarnError(ErrorCode.CONFIGURATION, "Peer URL must use HTTPS")
+        self.client = httpx.Client(
+            base_url=base_url.rstrip("/"),
+            verify=str(ca_certificate),
+            timeout=httpx.Timeout(timeout, connect=min(timeout, 5.0)),
+            follow_redirects=False,
+            transport=transport,
+        )
+
+    def close(self) -> None:
+        self.client.close()
+
+    def __enter__(self) -> PeerClient:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+    @staticmethod
+    def _raise_for_error(response: httpx.Response) -> None:
+        if response.is_success:
+            return
+        try:
+            error = response.json()["error"]
+            code = ErrorCode(error["code"])
+            message = error["message"]
+        except (KeyError, TypeError, ValueError):
+            code = ErrorCode.INVALID_REQUEST
+            message = f"Peer returned HTTP {response.status_code}"
+        raise BarnError(code, message)
+
+    @staticmethod
+    def _grant_header(grant_payload: dict[str, object]) -> str:
+        return encode_binary(json.dumps(grant_payload, separators=(",", ":")).encode())
+
+    def download(
+        self,
+        node: NodeService,
+        grant_payload: dict[str, object],
+        destination: Path,
+    ) -> Path:
+        grant = TransferGrant(
+            grant_id=grant_payload["grant_id"],
+            share_id=grant_payload["share_id"],
+            transfer_id=grant_payload["transfer_id"],
+            file_id=grant_payload["file_id"],
+            source_node_id=grant_payload["source_node_id"],
+            recipient_node_id=grant_payload["recipient_node_id"],
+            issued_at=grant_payload["issued_at"],
+            expires_at=grant_payload["expires_at"],
+            signature=decode_binary(str(grant_payload["signature"])),
+        )
+        header = {"X-Barn-Transfer-Grant": self._grant_header(grant_payload)}
+        response = self.client.get(f"/v1/files/{grant.file_id}/manifest", headers=header)
+        self._raise_for_error(response)
+        manifest = FileManifest.model_validate(response.json())
+        journal = node.start_transfer(grant, manifest)
+        for chunk in manifest.chunks:
+            if chunk.index in journal.completed_chunks:
+                continue
+            response = self.client.get(
+                f"/v1/files/{grant.file_id}/chunks/{chunk.index}", headers=header
+            )
+            self._raise_for_error(response)
+            journal = node.accept_transfer_chunk(grant, manifest, chunk.index, response.content)
+        return node.export_transfer(grant, manifest, destination)

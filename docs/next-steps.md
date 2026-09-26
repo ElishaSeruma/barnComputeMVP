@@ -156,6 +156,18 @@ passes with 55 tests and 79% coverage.
 Live download orchestration, cancellation, and relay transport remain outside
 this checkpoint.
 
+### Live download checkpoint
+
+Live recipient download orchestration is complete on Windows as of 2026-09-26.
+`barn share fetch` obtains a short-lived grant, retrieves the manifest and
+fixed-size chunks over CA-verified HTTPS, persists each verified chunk through
+the recipient journal, resumes already completed chunks, and performs final
+integrity-checked no-clobber export. Ruff passes and the full suite passes with
+56 tests and 79% coverage.
+
+Cancellation leaves the durable journal available for a later resume. Relay
+transport and richer cancellation/status controls remain separate work.
+
 ### Current Windows checkpoint
 
 The coordinator/node transport slice is implemented on Windows. It includes
@@ -170,7 +182,6 @@ persistence-first implementation.
 
 1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
    record the evidence under `docs/mac_test_results`.
-2. **Next implementation:** live download orchestration and cancellation.
-3. Relay transport and direct-to-relay failover.
-4. Complete automated security and packaging gates.
-5. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.
+2. **Next implementation:** relay transport and direct-to-relay failover.
+3. Complete automated security and packaging gates.
+4. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.

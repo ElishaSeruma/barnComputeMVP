@@ -50,3 +50,8 @@ coverage). Coverage includes authenticated loopback share creation, listing,
 revocation, and signed transfer-grant issuance. Detailed macOS evidence is in
 `docs/mac_test_results/2026-09-26-share-control-plane.md`. Live download
 orchestration, cancellation, and relay behavior remain NOT RUN.
+
+Live download checkpoint: Windows PASS on 2026-09-26 with Ruff PASS, 56 tests
+PASS, and 79% coverage. Coverage includes grant retrieval, CA-verified peer
+manifest/chunk orchestration, journal-backed resume, final integrity, and
+no-clobber export. Relay behavior remains NOT RUN.
