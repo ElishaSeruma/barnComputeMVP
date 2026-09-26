@@ -129,6 +129,13 @@ class TransferGrant(StrictModel):
     expires_at: datetime
     signature: bytes = Field(min_length=64, max_length=64)
 
+
+class TransferJournal(StrictModel):
+    transfer_id: UUID
+    file_id: UUID
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    completed_chunks: tuple[int, ...] = ()
+
 class Heartbeat(StrictModel):
     protocol_version: str = PROTOCOL_VERSION
     node_id: UUID

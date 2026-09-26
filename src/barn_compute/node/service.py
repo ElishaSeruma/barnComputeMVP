@@ -46,6 +46,7 @@ from ..models import (
     Heartbeat,
     NodeStatus,
     TransferGrant,
+    TransferJournal,
 )
 
 ENROLMENT_PROOF_DOMAIN = b"barn-enrolment-proof-v1\n"
@@ -457,3 +458,113 @@ class NodeService:
         if len(payload) != chunk.length or hashlib.sha256(payload).hexdigest() != chunk.sha256:
             raise BarnError(ErrorCode.CONFIGURATION, "Managed file chunk failed integrity check")
         return payload
+
+    def start_transfer(self, grant: TransferGrant, manifest: FileManifest) -> TransferJournal:
+        metadata = self.load_metadata()
+        if grant.recipient_node_id != metadata.node_id:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant recipient does not match this node")
+        if grant.file_id != manifest.file_id:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant file scope is invalid")
+        self._verify_transfer_grant(grant)
+        transfer_dir = ensure_private_directory(
+            self.state_dir / "transfers" / str(grant.transfer_id)
+        )
+        journal_path = transfer_dir / "journal.json"
+        if journal_path.exists():
+            try:
+                journal = TransferJournal.model_validate_json(
+                    journal_path.read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError) as exc:
+                raise BarnError(ErrorCode.CONFIGURATION, "Transfer journal is invalid") from exc
+            if journal.file_id != manifest.file_id or journal.manifest_sha256 != manifest.sha256:
+                raise BarnError(ErrorCode.INVALID_REQUEST, "Transfer manifest changed")
+            return journal
+        journal = TransferJournal(
+            transfer_id=grant.transfer_id,
+            file_id=manifest.file_id,
+            manifest_sha256=manifest.sha256,
+        )
+        write_private_json(journal_path, journal.model_dump(mode="json"))
+        return journal
+
+    def accept_transfer_chunk(
+        self,
+        grant: TransferGrant,
+        manifest: FileManifest,
+        index: int,
+        payload: bytes,
+    ) -> TransferJournal:
+        journal = self.start_transfer(grant, manifest)
+        if index < 0 or index >= len(manifest.chunks):
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Transfer chunk index is invalid")
+        chunk = manifest.chunks[index]
+        if len(payload) != chunk.length or hashlib.sha256(payload).hexdigest() != chunk.sha256:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Transfer chunk failed integrity check")
+        if index in journal.completed_chunks:
+            return journal
+        transfer_dir = self.state_dir / "transfers" / str(grant.transfer_id)
+        write_private_bytes(transfer_dir / f"chunk-{index:08d}.bin", payload)
+        updated = journal.model_copy(
+            update={"completed_chunks": tuple(sorted((*journal.completed_chunks, index)))}
+        )
+        write_private_json(transfer_dir / "journal.json", updated.model_dump(mode="json"))
+        return updated
+
+    def assemble_transfer(self, grant: TransferGrant, manifest: FileManifest) -> Path:
+        journal = self.start_transfer(grant, manifest)
+        expected = tuple(range(len(manifest.chunks)))
+        if journal.completed_chunks != expected:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Transfer is incomplete")
+        transfer_dir = self.state_dir / "transfers" / str(grant.transfer_id)
+        assembled = transfer_dir / "assembled.tmp"
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with assembled.open("wb") as output:
+                for index in expected:
+                    payload = (transfer_dir / f"chunk-{index:08d}.bin").read_bytes()
+                    output.write(payload)
+                    digest.update(payload)
+                    size += len(payload)
+                output.flush()
+                os.fsync(output.fileno())
+        except OSError as exc:
+            raise BarnError(ErrorCode.CONFIGURATION, "Transfer assembly failed") from exc
+        if size != manifest.size or digest.hexdigest() != manifest.sha256:
+            assembled.unlink(missing_ok=True)
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Assembled file failed integrity check")
+        return assembled
+
+    def export_transfer(
+        self, grant: TransferGrant, manifest: FileManifest, destination: Path
+    ) -> Path:
+        assembled = self.assemble_transfer(grant, manifest)
+        destination = destination.expanduser().resolve()
+        if destination.exists():
+            raise BarnError(ErrorCode.CONFIGURATION, "Destination already exists")
+        try:
+            ensure_private_directory(destination.parent)
+            temporary = destination.with_name(f".{destination.name}.{grant.transfer_id}.tmp")
+            shutil.copyfile(assembled, temporary)
+            os.replace(temporary, destination)
+        except OSError as exc:
+            temporary.unlink(missing_ok=True)
+            raise BarnError(ErrorCode.CONFIGURATION, "Transfer export failed") from exc
+        return destination
+
+    def _verify_transfer_grant(self, grant: TransferGrant) -> None:
+        checked_at = datetime.now(UTC)
+        if checked_at < grant.issued_at or checked_at >= grant.expires_at:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Transfer grant is expired")
+        try:
+            load_public_key((self.state_dir / "grant-public.key").read_bytes()).verify(
+                grant.signature,
+                canonical_transfer_grant(
+                    grant.grant_id, grant.share_id, grant.transfer_id, grant.file_id,
+                    grant.source_node_id, grant.recipient_node_id,
+                    grant.issued_at, grant.expires_at,
+                ),
+            )
+        except (InvalidSignature, OSError, ValueError) as exc:
+            raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Transfer grant is invalid") from exc

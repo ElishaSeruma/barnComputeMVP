@@ -33,3 +33,9 @@ routes, grant signature and expiry checks, source/file scope checks, and chunk
 integrity validation. Detailed macOS evidence is in
 `docs/mac_test_results/2026-09-26-peer-delivery.md`. Durable transfer sessions,
 resume, and relay behavior remain NOT RUN.
+
+Transfer journal checkpoint: Windows PASS on 2026-09-26 with Ruff PASS, 54
+tests PASS, and 80% coverage. Coverage includes durable recipient journals,
+verified chunk persistence, restart reuse, full-file assembly and SHA-256
+verification, and no-clobber export. Live download orchestration, cancellation,
+and relay behavior remain NOT RUN.

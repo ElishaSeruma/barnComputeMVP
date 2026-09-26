@@ -135,6 +135,17 @@ with 53 tests and 80% coverage.
 Durable transfer sessions, recipient-side journals, resume, final assembly,
 share HTTP/CLI surfaces, and relay transport remain separate stages.
 
+### Transfer journal checkpoint
+
+The durable recipient-side transfer slice is complete on Windows as of
+2026-09-26. It persists transfer journals after each verified fixed-size chunk,
+reuses completed chunks after restart, assembles only complete manifests,
+checks final size and SHA-256, and exports through a no-clobber destination
+operation. Ruff passes and the full suite passes with 54 tests and 80% coverage.
+
+The remaining gaps are share HTTP/CLI surfaces, live network download
+orchestration, cancellation, and relay transport.
+
 ### Current Windows checkpoint
 
 The coordinator/node transport slice is implemented on Windows. It includes
@@ -149,8 +160,7 @@ persistence-first implementation.
 
 1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
    record the evidence under `docs/mac_test_results`.
-2. **Next implementation:** durable transfer sessions and recipient-side journals.
-3. Resume, final integrity, and safe export.
-4. Secure outbound-only relay transport and direct-to-relay failover.
-5. Complete automated security and packaging gates.
-6. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.
+2. **Next implementation:** share HTTP/CLI surfaces and live download orchestration.
+3. Cancellation, relay transport, and direct-to-relay failover.
+4. Complete automated security and packaging gates.
+5. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.

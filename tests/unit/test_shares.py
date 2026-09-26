@@ -129,3 +129,27 @@ def test_peer_serves_only_grant_scoped_manifest_and_chunks(tmp_path) -> None:
         headers={"X-Barn-Transfer-Grant": header},
     )
     assert wrong_file.status_code == 403
+
+
+def test_recipient_journal_resumes_and_exports_without_clobbering(tmp_path) -> None:
+    coordinator, (source, recipient) = approved_nodes(tmp_path)
+    source_file = tmp_path / "payload.bin"
+    source_file.write_bytes(b"a" * 1_048_576 + b"final")
+    manifest = source.import_file(source_file)
+    share = coordinator.create_share(
+        manifest.file_id,
+        source.load_metadata().node_id,
+        recipient.load_metadata().node_id,
+        timedelta(minutes=10),
+    )
+    grant = coordinator.issue_transfer_grant(share.share_id, recipient.load_metadata().node_id)
+    first = recipient.accept_transfer_chunk(grant, manifest, 0, b"a" * 1_048_576)
+    assert first.completed_chunks == (0,)
+    resumed = recipient.start_transfer(grant, manifest)
+    assert resumed.completed_chunks == (0,)
+    recipient.accept_transfer_chunk(grant, manifest, 1, b"final")
+    destination = recipient.export_transfer(grant, manifest, tmp_path / "exported.bin")
+    assert destination.read_bytes() == source_file.read_bytes()
+    with pytest.raises(BarnError) as error:
+        recipient.export_transfer(grant, manifest, destination)
+    assert error.value.code is ErrorCode.CONFIGURATION

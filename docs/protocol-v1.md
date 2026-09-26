@@ -3,7 +3,9 @@
 Status: partial. Enrolment HTTP routes and the signed-request envelope are
 implemented; heartbeat and registry routes, local immutable file import, and
 share/grant authority and grant-authenticated peer manifest/chunk routes are
-implemented; durable transfer sessions and relay routes remain pending.
+implemented; durable recipient transfer journals, resume, assembly, and safe
+export are implemented; share HTTP/CLI, live download orchestration, and relay
+routes remain pending.
 
 ## Enrolment HTTP routes
 
