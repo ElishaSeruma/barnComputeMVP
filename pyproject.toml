@@ -27,6 +27,7 @@ dependencies = [
   "pydantic>=2.10,<3",
   "typer>=0.15,<1",
   "uvicorn>=0.35,<1",
+  "websockets>=15,<16",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +47,10 @@ Repository = "https://github.com/barncompute/barncompute"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/barn_compute"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "tests", "docs", "scripts", ".github", ".gitignore",
+                "README.md", "CHANGELOG.md", "LICENSE", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"

@@ -27,4 +27,4 @@ jobs:
       - run: python -m pytest -q
       - run: python -m build
       - run: python -m twine check dist/*
-
+      - run: python scripts/check_artifacts.py

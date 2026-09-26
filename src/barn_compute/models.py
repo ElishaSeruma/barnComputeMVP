@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 PROTOCOL_VERSION = "1.0"
 CHUNK_SIZE = 1024 * 1024
@@ -90,6 +90,17 @@ class FileManifest(StrictModel):
     chunks: tuple[ChunkManifest, ...]
     created_at: datetime
 
+    @model_validator(mode="after")
+    def validate_layout(self) -> FileManifest:
+        if self.protocol_version != PROTOCOL_VERSION or self.chunk_size != CHUNK_SIZE:
+            raise ValueError("Unsupported manifest protocol or chunk size")
+        if len(self.chunks) != (self.size + CHUNK_SIZE - 1) // CHUNK_SIZE:
+            raise ValueError("Manifest chunk count does not match size")
+        for chunk in self.chunks:
+            if chunk.length != min(CHUNK_SIZE, self.size - chunk.offset):
+                raise ValueError("Manifest chunk length does not match size")
+        return self
+
     @field_validator("created_at")
     @classmethod
     def require_utc(cls, value: datetime) -> datetime:
@@ -135,6 +146,9 @@ class TransferJournal(StrictModel):
     file_id: UUID
     manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     completed_chunks: tuple[int, ...] = ()
+    cancelled: bool = False
+    exported: bool = False
+    managed_file_id: UUID | None = None
 
 
 class RelayTicket(StrictModel):
@@ -142,6 +156,8 @@ class RelayTicket(StrictModel):
     barn_id: UUID
     source_node_id: UUID
     recipient_node_id: UUID
+    source_identity_key: str
+    recipient_identity_key: str
     issued_at: datetime
     expires_at: datetime
     signature: bytes = Field(min_length=64, max_length=64)

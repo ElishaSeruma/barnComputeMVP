@@ -25,10 +25,13 @@ from ..api_models import (
 from ..errors import BarnError, ErrorCode
 from ..http_common import install_http_safety
 from .app import _result_response
+from .repository import CoordinatorRepository
 from .service import CoordinatorService
 
 
 def create_admin_app(service: CoordinatorService, admin_token: str) -> FastAPI:
+    with CoordinatorRepository(service.database_path) as repository:
+        repository.migrate()
     app = FastAPI(title="barnCompute coordinator admin", version=__version__)
     install_http_safety(app)
 
@@ -109,9 +112,7 @@ def create_admin_app(service: CoordinatorService, admin_token: str) -> FastAPI:
         recipient_node_id: str,
         _admin: None = Depends(require_admin),
     ) -> GrantResponse:
-        grant = service.issue_transfer_grant(
-            UUID(share_id), UUID(recipient_node_id)
-        )
+        grant = service.issue_transfer_grant(UUID(share_id), UUID(recipient_node_id))
         return GrantResponse(
             **grant.model_dump(exclude={"signature"}), signature=encode_binary(grant.signature)
         )
@@ -130,5 +131,28 @@ def create_admin_app(service: CoordinatorService, admin_token: str) -> FastAPI:
             **ticket.model_dump(exclude={"signature"}),
             signature=encode_binary(ticket.signature),
         )
+
+    @app.post("/local/v1/nodes/{node_id}/revoke", status_code=204)
+    async def revoke_node(node_id: UUID, _admin: None = Depends(require_admin)) -> None:
+        from datetime import UTC, datetime
+
+        from .repository import CoordinatorRepository
+
+        with CoordinatorRepository(service.database_path) as repository, repository.connection:
+            changed = repository.connection.execute(
+                "UPDATE nodes SET status = 'REVOKED', revoked_at = ? WHERE node_id = ?",
+                (datetime.now(UTC).isoformat(), str(node_id)),
+            ).rowcount
+        if not changed:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Node is unavailable")
+
+    @app.get("/local/v1/audit")
+    async def audit(_admin: None = Depends(require_admin)) -> list[dict]:
+        with CoordinatorRepository(service.database_path) as repository:
+            rows = repository.connection.execute(
+                "SELECT occurred_at, operation, subject_id, outcome FROM audit_events "
+                "ORDER BY occurred_at DESC LIMIT 100"
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     return app

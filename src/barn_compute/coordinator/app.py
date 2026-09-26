@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import UTC, datetime
+from uuid import UUID
 
-from fastapi import FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, Request
 from pydantic import ValidationError
 
 from .. import __version__
@@ -19,6 +20,7 @@ from ..api_models import (
     ReceiptResponse,
     RegistryResponse,
     ResultResponse,
+    ShareCreateRequest,
     StatusResponse,
     decode_binary,
     encode_binary,
@@ -27,6 +29,7 @@ from ..auth import SignedRequest
 from ..errors import BarnError, ErrorCode
 from ..http_common import install_http_safety
 from ..models import EnrolmentSubmission
+from .repository import CoordinatorRepository
 from .service import CoordinatorService
 
 
@@ -35,13 +38,9 @@ def _result_response(result: object) -> ResultResponse:
         request_id=result.request_id,
         status=result.status,
         barn_id=result.barn_id,
-        certificate_pem=(
-            encode_binary(result.certificate_pem) if result.certificate_pem else None
-        ),
+        certificate_pem=(encode_binary(result.certificate_pem) if result.certificate_pem else None),
         ca_certificate_pem=(
-            encode_binary(result.ca_certificate_pem)
-            if result.ca_certificate_pem
-            else None
+            encode_binary(result.ca_certificate_pem) if result.ca_certificate_pem else None
         ),
         grant_public_key=(
             encode_binary(result.grant_public_key) if result.grant_public_key else None
@@ -51,6 +50,8 @@ def _result_response(result: object) -> ResultResponse:
 
 
 def create_public_app(service: CoordinatorService) -> FastAPI:
+    with CoordinatorRepository(service.database_path) as repository:
+        repository.migrate()
     app = FastAPI(title="barnCompute coordinator", version=__version__)
     install_http_safety(app)
 
@@ -85,9 +86,7 @@ def create_public_app(service: CoordinatorService) -> FastAPI:
             )
         except ValueError as exc:
             raise BarnError(ErrorCode.INVALID_REQUEST, "Enrolment encoding is invalid") from exc
-        receipt = service.submit_enrolment(
-            request.invite_code.get_secret_value(), submission
-        )
+        receipt = service.submit_enrolment(request.invite_code.get_secret_value(), submission)
         return ReceiptResponse(
             request_id=receipt.request_id,
             receipt=receipt.receipt,
@@ -138,9 +137,7 @@ def create_public_app(service: CoordinatorService) -> FastAPI:
             raise BarnError(ErrorCode.INVALID_REQUEST, "Heartbeat is invalid") from exc
         accepted_at = service.accept_heartbeat(
             value,
-            signed_request(
-                request, body, x_barn_timestamp, x_barn_nonce, x_barn_signature
-            ),
+            signed_request(request, body, x_barn_timestamp, x_barn_nonce, x_barn_signature),
         )
         return HeartbeatResponse(accepted_at=accepted_at, status="ONLINE")
 
@@ -164,5 +161,118 @@ def create_public_app(service: CoordinatorService) -> FastAPI:
             generated_at=generated_at,
             nodes=[NodeRecordResponse(**asdict(record)) for record in records],
         )
+
+    async def member(request: Request) -> UUID:
+        headers = request.headers
+        try:
+            node_id = UUID(headers.get("x-barn-node-id", ""))
+        except ValueError as exc:
+            raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Node identity is required") from exc
+        service._authenticate_node(
+            str(node_id),
+            signed_request(
+                request,
+                await request.body(),
+                headers.get("x-barn-timestamp"),
+                headers.get("x-barn-nonce"),
+                headers.get("x-barn-signature"),
+            ),
+            now=datetime.now(UTC),
+        )
+        return node_id
+
+    def wire(value: object) -> dict:
+        payload = value.model_dump(mode="json", exclude={"signature"})
+        payload["signature"] = encode_binary(value.signature)
+        return payload
+
+    @app.post("/v1/shares")
+    async def create_share(value: ShareCreateRequest, node_id: UUID = Depends(member)) -> dict:
+        from datetime import timedelta
+
+        if value.source_node_id != node_id:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Only the source may create a share")
+        return service.create_share(
+            value.file_id, node_id, value.recipient_node_id, timedelta(seconds=value.ttl_seconds)
+        ).model_dump(mode="json")
+
+    @app.get("/v1/shares")
+    async def inbox(node_id: UUID = Depends(member)) -> list[dict]:
+        return [
+            value.model_dump(mode="json")
+            for value in service.list_shares()
+            if node_id in (value.source_node_id, value.recipient_node_id)
+        ]
+
+    @app.post("/v1/shares/{share_id}/grant")
+    async def grant(share_id: UUID, node_id: UUID = Depends(member)) -> dict:
+        return wire(service.issue_transfer_grant(share_id, node_id))
+
+    @app.post("/v1/shares/{share_id}/revoke", status_code=204)
+    async def revoke(share_id: UUID, node_id: UUID = Depends(member)) -> None:
+        shares = service.list_shares()
+        if not any(s.share_id == share_id and s.source_node_id == node_id for s in shares):
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Only the source may revoke a share")
+        service.revoke_share(share_id)
+
+    @app.post("/v1/grants/validate")
+    async def validate_grant(request: Request, node_id: UUID = Depends(member)) -> dict:
+        from ..models import TransferGrant
+
+        payload = await request.json()
+        payload["signature"] = decode_binary(payload["signature"])
+        supplied = TransferGrant.model_validate(payload)
+        if node_id not in (supplied.source_node_id, supplied.recipient_node_id):
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant peer scope is invalid")
+        # Recheck current share and both membership records on every delivery.
+        current = service.issue_transfer_grant(supplied.share_id, supplied.recipient_node_id)
+        if (current.file_id, current.source_node_id) != (supplied.file_id, supplied.source_node_id):
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant scope is invalid")
+        return {"valid": True}
+
+    @app.get("/v1/nodes/{peer_id}/identity")
+    async def identity(peer_id: UUID, node_id: UUID = Depends(member)) -> dict:
+        with CoordinatorRepository(service.database_path) as repository:
+            peer = repository.get_node(str(peer_id))
+        if peer is None or peer["status"] == "REVOKED":
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Peer is unavailable")
+        return {
+            "node_id": str(peer_id),
+            "identity_public_key": encode_binary(peer["identity_public_key"]),
+        }
+
+    @app.post("/v1/shares/{share_id}/relay-ticket")
+    async def relay_ticket(share_id: UUID, node_id: UUID = Depends(member)) -> dict:
+        import json
+
+        grant = service.issue_transfer_grant(share_id, node_id)
+        ticket = service.issue_relay_ticket(grant.source_node_id, node_id)
+        payload = wire(ticket)
+        with CoordinatorRepository(service.database_path) as repository, repository.connection:
+            repository.connection.execute(
+                "DELETE FROM relay_tickets WHERE expires_at < ?",
+                (datetime.now(UTC).isoformat(),),
+            )
+            repository.connection.execute(
+                "INSERT INTO relay_tickets VALUES (?, ?, ?, ?)",
+                (
+                    str(ticket.ticket_id),
+                    str(ticket.source_node_id),
+                    ticket.expires_at.isoformat(),
+                    json.dumps(payload),
+                ),
+            )
+        return payload
+
+    @app.get("/v1/relay/tickets")
+    async def relay_inbox(node_id: UUID = Depends(member)) -> list[dict]:
+        import json
+
+        with CoordinatorRepository(service.database_path) as repository:
+            rows = repository.connection.execute(
+                "SELECT payload FROM relay_tickets WHERE source_node_id = ? AND expires_at > ?",
+                (str(node_id), datetime.now(UTC).isoformat()),
+            ).fetchall()
+        return [json.loads(row["payload"]) for row in rows]
 
     return app

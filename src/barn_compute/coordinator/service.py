@@ -440,9 +440,7 @@ class CoordinatorService:
     def reject_enrolment(self, request_id: str, *, now: datetime | None = None) -> None:
         self.load_metadata()
         with CoordinatorRepository(self.database_path) as repository:
-            if not repository.reject_enrolment(
-                request_id, (now or datetime.now(UTC)).isoformat()
-            ):
+            if not repository.reject_enrolment(request_id, (now or datetime.now(UTC)).isoformat()):
                 raise BarnError(ErrorCode.INVALID_REQUEST, "Enrolment request is not pending")
 
     def poll_enrolment(self, receipt: str) -> EnrolmentResult:
@@ -645,9 +643,13 @@ class CoordinatorService:
                     ErrorCode.NOT_AUTHORISED,
                     "Recipient node is not an active Barn member",
                 )
+            source = repository.get_node(row["source_node_id"])
+            if source is None or source["status"] == NodeStatus.REVOKED:
+                raise BarnError(ErrorCode.NOT_AUTHORISED, "Source node is not an active member")
         expires_at = min(_utc(row["expires_at"]), issued_at + timedelta(minutes=5))
         grant_id = uuid4()
-        transfer_id = uuid4()
+        # Renewing authority for an immutable share preserves the recipient journal.
+        transfer_id = share_id
         signature = load_private_identity(self.state_dir / "secrets" / "grant-key.pem").sign(
             canonical_transfer_grant(
                 grant_id,
@@ -689,6 +691,9 @@ class CoordinatorService:
         metadata = self.load_metadata()
         if source_node_id == recipient_node_id:
             raise BarnError(ErrorCode.INVALID_REQUEST, "Relay peers must be different nodes")
+        from ..api_models import encode_binary
+
+        identity_keys = []
         with CoordinatorRepository(self.database_path) as repository:
             for node_id in (source_node_id, recipient_node_id):
                 node = repository.get_node(str(node_id))
@@ -697,15 +702,23 @@ class CoordinatorService:
                         ErrorCode.NOT_AUTHORISED,
                         "Relay peer is not an active Barn member",
                     )
+                identity_keys.append(encode_binary(node["identity_public_key"]))
         expires_at = issued_at + ttl
         ticket_id = uuid4()
         signature = load_private_identity(self.state_dir / "secrets" / "grant-key.pem").sign(
             canonical_relay_ticket(
-                ticket_id, metadata.barn_id, source_node_id, recipient_node_id,
-                issued_at, expires_at,
+                ticket_id,
+                metadata.barn_id,
+                source_node_id,
+                recipient_node_id,
+                issued_at,
+                expires_at,
+                *identity_keys,
             )
         )
         return RelayTicket(
+            source_identity_key=identity_keys[0],
+            recipient_identity_key=identity_keys[1],
             ticket_id=ticket_id,
             barn_id=metadata.barn_id,
             source_node_id=source_node_id,
@@ -716,9 +729,7 @@ class CoordinatorService:
         )
 
     @staticmethod
-    def _result_from_row(
-        request: sqlite3.Row, metadata: CoordinatorMetadata
-    ) -> EnrolmentResult:
+    def _result_from_row(request: sqlite3.Row, metadata: CoordinatorMetadata) -> EnrolmentResult:
         status = EnrolmentStatus(request["status"])
         approved = status is EnrolmentStatus.APPROVED
         return EnrolmentResult(

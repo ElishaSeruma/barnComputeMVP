@@ -1,5 +1,7 @@
 import pytest
+from cryptography.exceptions import InvalidTag
 from typer.testing import CliRunner
+from websockets.exceptions import WebSocketException
 
 from barn_compute import __version__, cli
 from barn_compute.cli import app
@@ -30,3 +32,14 @@ def test_main_returns_clean_nonzero_exit_for_barn_error(monkeypatch, capsys) -> 
         cli.main()
     assert exited.value.code == 2
     assert "CONFIGURATION: safe message" in capsys.readouterr().err
+    for failure in (WebSocketException("private transport details"), InvalidTag()):
+        def fail_transport(failure=failure):
+            raise failure
+
+        monkeypatch.setattr(cli, "app", fail_transport)
+        with pytest.raises(SystemExit) as exited:
+            cli.main()
+        assert exited.value.code == 2
+        output = capsys.readouterr().err
+        assert "CONFIGURATION" in output
+        assert "private transport details" not in output

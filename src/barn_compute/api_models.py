@@ -142,6 +142,8 @@ class RelayTicketResponse(StrictModel):
     barn_id: UUID
     source_node_id: UUID
     recipient_node_id: UUID
+    source_identity_key: str
+    recipient_identity_key: str
     issued_at: datetime
     expires_at: datetime
     signature: str

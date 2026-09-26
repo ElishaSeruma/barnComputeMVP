@@ -6,7 +6,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class CoordinatorRepository:
@@ -102,6 +102,46 @@ class CoordinatorRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_file_shares_recipient
                     ON file_shares(recipient_node_id, expires_at);
+                CREATE TABLE IF NOT EXISTS relay_tickets (
+                    ticket_id TEXT PRIMARY KEY,
+                    source_node_id TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS audit_share_create AFTER INSERT ON file_shares
+                BEGIN
+                    INSERT INTO audit_events(event_id, occurred_at, operation, subject_id, outcome)
+                    VALUES(lower(hex(randomblob(16))), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                           'share.create', NEW.share_id, 'PASS');
+                END;
+                CREATE TRIGGER IF NOT EXISTS audit_share_revoke AFTER UPDATE ON file_shares
+                WHEN OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+                BEGIN
+                    INSERT INTO audit_events(event_id, occurred_at, operation, subject_id, outcome)
+                    VALUES(lower(hex(randomblob(16))), NEW.revoked_at,
+                           'share.revoke', NEW.share_id, 'PASS');
+                END;
+                CREATE TRIGGER IF NOT EXISTS audit_invite_create AFTER INSERT ON enrolment_invites
+                BEGIN
+                    INSERT INTO audit_events(event_id, occurred_at, operation, subject_id, outcome)
+                    VALUES(lower(hex(randomblob(16))), NEW.created_at,
+                           'invite.create', NEW.invite_id, 'PASS');
+                END;
+                CREATE TRIGGER IF NOT EXISTS audit_enrolment_decision
+                AFTER UPDATE ON enrolment_requests
+                WHEN OLD.status = 'AWAITING_APPROVAL' AND NEW.status IN ('APPROVED', 'REJECTED')
+                BEGIN
+                    INSERT INTO audit_events(event_id, occurred_at, operation, subject_id, outcome)
+                    VALUES(lower(hex(randomblob(16))), NEW.decided_at,
+                           'enrolment.' || lower(NEW.status), NEW.request_id, 'PASS');
+                END;
+                CREATE TRIGGER IF NOT EXISTS audit_node_revoke AFTER UPDATE ON nodes
+                WHEN OLD.status != 'REVOKED' AND NEW.status = 'REVOKED'
+                BEGIN
+                    INSERT INTO audit_events(event_id, occurred_at, operation, subject_id, outcome)
+                    VALUES(lower(hex(randomblob(16))), NEW.revoked_at,
+                           'node.revoke', NEW.node_id, 'PASS');
+                END;
                 """
             )
             columns = {

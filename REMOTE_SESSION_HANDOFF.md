@@ -1,5 +1,16 @@
 # barnCompute remote-session handoff
 
+## Current handoff - 2026-09-26
+
+The integrated M1 runtime supersedes the historical 2026-09-25 notes below.
+Read `docs/M1_ACCEPTANCE_RUNBOOK.md` and the latest `docs/test-report.md` first.
+The Mac 63-test handshake checkpoint passed at `8f5df27`; subsequent work
+integrates actual direct/relay delivery, signed remote share control, stable
+resume, live revocation, node workers, identity admission and package checks.
+Mac must now refresh dependencies (including websockets 15) and test the new
+commit. Local tests do not replace public relay, TestPyPI provenance or
+physical cross-platform acceptance. Never mark those gates PASS without evidence.
+
 Prepared: 2026-09-25  
 Repository: `barnComputeMVP`  
 Branch: `main`  
@@ -270,4 +281,3 @@ clean environments on the physical Mac and Windows machines and demonstrates:
   relay outage and direct-to-relay failover.
 
 Until then, the release verdict remains `NOT YET RUN` or `BLOCKED`, never `PASS`.
-

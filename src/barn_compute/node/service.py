@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import shutil
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -111,6 +112,22 @@ def canonical_enrolment_proof(
 class NodeService:
     def __init__(self, state_dir: Path) -> None:
         self.state_dir = state_dir.expanduser().resolve()
+
+    def confined(self, *parts: str) -> Path:
+        path = self.state_dir
+        for part in parts:
+            if part in (".", "..") or "/" in part or "\\" in part:
+                raise BarnError(ErrorCode.INVALID_REQUEST, "Unsafe managed path")
+            path = path / part
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                raise BarnError(
+                    ErrorCode.CONFIGURATION, "Managed path contains a link or reparse point"
+                )
+        return path
 
     @property
     def metadata_path(self) -> Path:
@@ -243,8 +260,10 @@ class NodeService:
     def load_receipt(self) -> str:
         try:
             return (
-                self.state_dir / "secrets" / "enrolment-receipt.token"
-            ).read_text(encoding="ascii").strip()
+                (self.state_dir / "secrets" / "enrolment-receipt.token")
+                .read_text(encoding="ascii")
+                .strip()
+            )
         except OSError as exc:
             raise BarnError(ErrorCode.CONFIGURATION, "Enrolment receipt is unavailable") from exc
 
@@ -264,9 +283,7 @@ class NodeService:
         metadata = self.load_metadata()
         certificate = x509.load_pem_x509_certificate(result.certificate_pem)
         ca_certificate = x509.load_pem_x509_certificate(result.ca_certificate_pem)
-        pinned_ca = x509.load_pem_x509_certificate(
-            (self.state_dir / "trusted-ca.pem").read_bytes()
-        )
+        pinned_ca = x509.load_pem_x509_certificate((self.state_dir / "trusted-ca.pem").read_bytes())
         if certificate_fingerprint(ca_certificate) != certificate_fingerprint(pinned_ca):
             raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Enrolment used an untrusted Barn CA")
         ca_public_key = ca_certificate.public_key()
@@ -329,7 +346,7 @@ class NodeService:
     def store_registry(self, payload: dict[str, object]) -> None:
         write_private_json(self.state_dir / "registry.json", payload)
 
-    def import_file(self, source: Path) -> FileManifest:
+    def import_file(self, source: Path, *, display_name: str | None = None) -> FileManifest:
         source = source.expanduser()
         if source.is_symlink() or not source.is_file():
             raise BarnError(ErrorCode.INVALID_REQUEST, "Source must be a regular file")
@@ -342,7 +359,9 @@ class NodeService:
             raise BarnError(ErrorCode.INVALID_REQUEST, "File exceeds the 512 MiB maximum")
 
         metadata = self.load_metadata()
-        managed_dir = ensure_private_directory(self.state_dir / "managed")
+        managed_dir = ensure_private_directory(self.confined("managed"))
+        if shutil.disk_usage(managed_dir).free < size + CHUNK_SIZE:
+            raise BarnError(ErrorCode.CONFIGURATION, "Insufficient managed storage")
         file_id = uuid4()
         file_dir = managed_dir / str(file_id)
         staging_path = managed_dir / f".{file_id}.staging"
@@ -368,6 +387,8 @@ class NodeService:
                     staged.write(chunk)
                     file_hash.update(chunk)
                     copied += len(chunk)
+                    if copied > MAX_FILE_SIZE:
+                        raise BarnError(ErrorCode.INVALID_REQUEST, "File grew beyond maximum size")
                 staged.flush()
                 os.fsync(staged.fileno())
             if copied != size:
@@ -379,7 +400,7 @@ class NodeService:
             manifest = FileManifest(
                 file_id=file_id,
                 owner_node_id=metadata.node_id,
-                display_name=source.name,
+                display_name=display_name or source.name,
                 size=copied,
                 sha256=file_hash.hexdigest(),
                 chunks=tuple(chunks),
@@ -398,11 +419,12 @@ class NodeService:
                 shutil.rmtree(file_dir)
 
     def list_files(self) -> list[FileManifest]:
-        managed_dir = self.state_dir / "managed"
+        managed_dir = self.confined("managed")
         if not managed_dir.exists():
             return []
         manifests: list[FileManifest] = []
         for manifest_path in sorted(managed_dir.glob("*/manifest.json")):
+            self.confined("managed", manifest_path.parent.name, "manifest.json")
             try:
                 manifests.append(
                     FileManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
@@ -417,6 +439,8 @@ class NodeService:
         self, grant: TransferGrant, index: int, *, now: datetime | None = None
     ) -> bytes:
         checked_at = now or datetime.now(UTC)
+        if index < 0:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Chunk index is invalid")
         metadata = self.load_metadata()
         if grant.source_node_id != metadata.node_id:
             raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant source does not match this node")
@@ -438,8 +462,8 @@ class NodeService:
             )
         except (InvalidSignature, OSError, ValueError) as exc:
             raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Transfer grant is invalid") from exc
-        manifest_path = self.state_dir / "managed" / str(grant.file_id) / "manifest.json"
-        data_path = manifest_path.parent / "data"
+        manifest_path = self.confined("managed", str(grant.file_id), "manifest.json")
+        data_path = self.confined("managed", str(grant.file_id), "data")
         try:
             manifest = FileManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
             chunk = manifest.chunks[index]
@@ -459,17 +483,19 @@ class NodeService:
             raise BarnError(ErrorCode.CONFIGURATION, "Managed file chunk failed integrity check")
         return payload
 
-    def start_transfer(self, grant: TransferGrant, manifest: FileManifest) -> TransferJournal:
+    def start_transfer(
+        self, grant: TransferGrant, manifest: FileManifest, *, revalidate: bool = True
+    ) -> TransferJournal:
         metadata = self.load_metadata()
         if grant.recipient_node_id != metadata.node_id:
             raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant recipient does not match this node")
         if grant.file_id != manifest.file_id:
             raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant file scope is invalid")
+        if manifest.owner_node_id != grant.source_node_id:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Manifest owner does not match source")
         self._verify_transfer_grant(grant)
-        transfer_dir = ensure_private_directory(
-            self.state_dir / "transfers" / str(grant.transfer_id)
-        )
-        journal_path = transfer_dir / "journal.json"
+        transfer_dir = ensure_private_directory(self.confined("transfers", str(grant.transfer_id)))
+        journal_path = self.confined("transfers", str(grant.transfer_id), "journal.json")
         if journal_path.exists():
             try:
                 journal = TransferJournal.model_validate_json(
@@ -479,7 +505,30 @@ class NodeService:
                 raise BarnError(ErrorCode.CONFIGURATION, "Transfer journal is invalid") from exc
             if journal.file_id != manifest.file_id or journal.manifest_sha256 != manifest.sha256:
                 raise BarnError(ErrorCode.INVALID_REQUEST, "Transfer manifest changed")
+            if journal.cancelled:
+                raise BarnError(ErrorCode.CONFIGURATION, "Transfer is cancelled; resume it first")
+            if not revalidate:
+                return journal
+            valid = []
+            for index in journal.completed_chunks:
+                if index < 0 or index >= len(manifest.chunks):
+                    raise BarnError(ErrorCode.CONFIGURATION, "Transfer journal index is invalid")
+                chunk_path = transfer_dir / f"chunk-{index:08d}.bin"
+                if chunk_path.is_symlink():
+                    raise BarnError(ErrorCode.CONFIGURATION, "Transfer chunk path is unsafe")
+                try:
+                    data = chunk_path.read_bytes()
+                except FileNotFoundError:
+                    continue
+                chunk = manifest.chunks[index]
+                if len(data) == chunk.length and hashlib.sha256(data).hexdigest() == chunk.sha256:
+                    valid.append(index)
+            if tuple(valid) != journal.completed_chunks:
+                journal = journal.model_copy(update={"completed_chunks": tuple(valid)})
+                write_private_json(journal_path, journal.model_dump(mode="json"))
             return journal
+        if shutil.disk_usage(transfer_dir).free < manifest.size * 4 + CHUNK_SIZE:
+            raise BarnError(ErrorCode.CONFIGURATION, "Insufficient transfer storage")
         journal = TransferJournal(
             transfer_id=grant.transfer_id,
             file_id=manifest.file_id,
@@ -495,7 +544,7 @@ class NodeService:
         index: int,
         payload: bytes,
     ) -> TransferJournal:
-        journal = self.start_transfer(grant, manifest)
+        journal = self.start_transfer(grant, manifest, revalidate=False)
         if index < 0 or index >= len(manifest.chunks):
             raise BarnError(ErrorCode.INVALID_REQUEST, "Transfer chunk index is invalid")
         chunk = manifest.chunks[index]
@@ -503,8 +552,10 @@ class NodeService:
             raise BarnError(ErrorCode.INVALID_REQUEST, "Transfer chunk failed integrity check")
         if index in journal.completed_chunks:
             return journal
-        transfer_dir = self.state_dir / "transfers" / str(grant.transfer_id)
-        write_private_bytes(transfer_dir / f"chunk-{index:08d}.bin", payload)
+        transfer_dir = self.confined("transfers", str(grant.transfer_id))
+        write_private_bytes(
+            self.confined("transfers", str(grant.transfer_id), f"chunk-{index:08d}.bin"), payload
+        )
         updated = journal.model_copy(
             update={"completed_chunks": tuple(sorted((*journal.completed_chunks, index)))}
         )
@@ -512,18 +563,19 @@ class NodeService:
         return updated
 
     def assemble_transfer(self, grant: TransferGrant, manifest: FileManifest) -> Path:
-        journal = self.start_transfer(grant, manifest)
+        journal = self.start_transfer(grant, manifest, revalidate=False)
         expected = tuple(range(len(manifest.chunks)))
         if journal.completed_chunks != expected:
             raise BarnError(ErrorCode.INVALID_REQUEST, "Transfer is incomplete")
-        transfer_dir = self.state_dir / "transfers" / str(grant.transfer_id)
-        assembled = transfer_dir / "assembled.tmp"
+        assembled = self.confined("transfers", str(grant.transfer_id), "assembled.tmp")
         digest = hashlib.sha256()
         size = 0
         try:
             with assembled.open("wb") as output:
                 for index in expected:
-                    payload = (transfer_dir / f"chunk-{index:08d}.bin").read_bytes()
+                    payload = self.confined(
+                        "transfers", str(grant.transfer_id), f"chunk-{index:08d}.bin"
+                    ).read_bytes()
                     output.write(payload)
                     digest.update(payload)
                     size += len(payload)
@@ -540,18 +592,55 @@ class NodeService:
         self, grant: TransferGrant, manifest: FileManifest, destination: Path
     ) -> Path:
         assembled = self.assemble_transfer(grant, manifest)
-        destination = destination.expanduser().resolve()
-        if destination.exists():
+        destination = destination.expanduser().absolute()
+        if destination.exists() or destination.is_symlink():
             raise BarnError(ErrorCode.CONFIGURATION, "Destination already exists")
+        journal = self.start_transfer(grant, manifest, revalidate=False)
+        journal_path = self.confined("transfers", str(grant.transfer_id), "journal.json")
+        if journal.managed_file_id is None:
+            received = self.import_file(assembled, display_name=manifest.display_name)
+            journal = journal.model_copy(update={"managed_file_id": received.file_id})
+            write_private_json(journal_path, journal.model_dump(mode="json"))
         try:
             ensure_private_directory(destination.parent)
             temporary = destination.with_name(f".{destination.name}.{grant.transfer_id}.tmp")
-            shutil.copyfile(assembled, temporary)
-            os.replace(temporary, destination)
+            with assembled.open("rb") as source, temporary.open("xb") as output:
+                shutil.copyfileobj(source, output, CHUNK_SIZE)
+                output.flush()
+                os.fsync(output.fileno())
+            # Atomic no-clobber publication, including a concurrent destination creation.
+            os.link(temporary, destination)
+            temporary.unlink()
         except OSError as exc:
             temporary.unlink(missing_ok=True)
             raise BarnError(ErrorCode.CONFIGURATION, "Transfer export failed") from exc
+        journal = journal.model_copy(update={"exported": True})
+        write_private_json(journal_path, journal.model_dump(mode="json"))
         return destination
+
+    def grant_manifest(self, grant: TransferGrant) -> FileManifest:
+        self._verify_transfer_grant(grant)
+        metadata = self.load_metadata()
+        if grant.source_node_id != metadata.node_id:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant source does not match node")
+        path = self.confined("managed", str(grant.file_id), "manifest.json")
+        try:
+            manifest = FileManifest.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Managed manifest is unavailable") from exc
+        if manifest.file_id != grant.file_id or manifest.owner_node_id != metadata.node_id:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Manifest scope is invalid")
+        return manifest
+
+    def transfer_control(self, transfer_id: UUID, *, cancelled: bool) -> TransferJournal:
+        path = self.confined("transfers", str(transfer_id), "journal.json")
+        try:
+            journal = TransferJournal.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise BarnError(ErrorCode.INVALID_REQUEST, "Transfer is unavailable") from exc
+        journal = journal.model_copy(update={"cancelled": cancelled})
+        write_private_json(path, journal.model_dump(mode="json"))
+        return journal
 
     def _verify_transfer_grant(self, grant: TransferGrant) -> None:
         checked_at = datetime.now(UTC)
@@ -561,9 +650,14 @@ class NodeService:
             load_public_key((self.state_dir / "grant-public.key").read_bytes()).verify(
                 grant.signature,
                 canonical_transfer_grant(
-                    grant.grant_id, grant.share_id, grant.transfer_id, grant.file_id,
-                    grant.source_node_id, grant.recipient_node_id,
-                    grant.issued_at, grant.expires_at,
+                    grant.grant_id,
+                    grant.share_id,
+                    grant.transfer_id,
+                    grant.file_id,
+                    grant.source_node_id,
+                    grant.recipient_node_id,
+                    grant.issued_at,
+                    grant.expires_at,
                 ),
             )
         except (InvalidSignature, OSError, ValueError) as exc:

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeVar
 
+import httpx
+
 from .errors import BarnError, ErrorCode
 
 T = TypeVar("T")
@@ -61,7 +63,7 @@ def with_failover(
         raise BarnError(ErrorCode.CONFIGURATION, "Transport mode is invalid")
     try:
         return direct(), TransportDecision(TransportPath.DIRECT)
-    except Exception as direct_error:
+    except (OSError, httpx.TransportError) as direct_error:
         if mode == "direct" or not relay_configured:
             raise direct_error
         try:

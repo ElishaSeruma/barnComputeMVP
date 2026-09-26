@@ -223,11 +223,18 @@ persistence-first implementation.
 
 ## Following slices
 
-1. **Verification gate:** run the HTTPS/admin test runbook on Apple Silicon and
-   record the evidence under `docs/mac_test_results`.
-2. **Verification gate:** rerun the full suite on Apple Silicon for the
-   identity-bound inner handshake and record evidence under
-   `docs/mac_test_results`.
-3. Production relay deployment and physical direct-to-relay failover.
-4. Complete automated security and packaging gates.
-5. Owner-authorised TestPyPI release and physical macOS/Windows acceptance.
+The integrated runtime supersedes the isolated checkpoints above. Real local
+HTTPS/WSS transfer tests and signed remote workflows are now implemented.
+Windows source verification passed all 82 tests without skips at 82% coverage;
+the independent installed-wheel suite also passed. Detailed results are in
+`WINDOWS_M1_RUNTIME_VERIFICATION.md`.
+The current completion gates are:
+
+1. Run the complete updated suite and packaging checks on Mac, following
+   `docs/M1_ACCEPTANCE_RUNBOOK.md`; record the tested commit and results.
+2. Deploy the separately configured public WSS relay and test both physical
+   transfer directions, interruption, recovery, revocation and blocked-direct
+   fallback. Coordinator HTTPS access is required on both hosts.
+3. Provide TestPyPI credentials/package ownership, publish the inspected
+   release candidate, and install that artifact on both physical machines.
+4. Review all evidence and mark M1 ACCEPTED only when every release gate passes.

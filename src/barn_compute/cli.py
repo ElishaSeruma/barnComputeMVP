@@ -8,7 +8,10 @@ from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
 
+import httpx
 import typer
+from cryptography.exceptions import InvalidSignature, InvalidTag
+from websockets.exceptions import WebSocketException
 
 from . import __version__
 from .config import (
@@ -22,7 +25,7 @@ from .coordinator.service import CoordinatorService
 from .errors import BarnError, ErrorCode
 from .node.client import CoordinatorClient, PeerClient
 from .node.service import NodeService
-from .server import serve_coordinator, serve_node
+from .server import serve_coordinator, serve_node, serve_relay
 
 app = typer.Typer(help="Private authenticated device groups and secure file exchange.")
 config_app = typer.Typer(help="Manage local barnCompute configuration.")
@@ -256,8 +259,19 @@ def node_start(
     peer_port: int = typer.Option(8445, "--peer-port", min=1, max=65535),
     admin_port: int = typer.Option(8755, "--admin-port", min=1, max=65535),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
+    coordinator: str = typer.Option(..., "--coordinator"),
+    relay_url: str | None = typer.Option(None, "--relay-url"),
+    relay_ca_cert: Path | None = typer.Option(None, "--relay-ca-cert"),
 ) -> None:
-    serve_node(_node_service(state_dir).state_dir, bind, peer_port, admin_port)
+    serve_node(
+        _node_service(state_dir).state_dir,
+        bind,
+        peer_port,
+        admin_port,
+        coordinator,
+        relay_url or load_config().relay_url,
+        relay_ca_cert,
+    )
 
 
 @node_app.command("heartbeat")
@@ -283,23 +297,8 @@ def node_registry_refresh(
         result = client.refresh_registry(node)
     for record in result["nodes"]:
         typer.echo(
-            f"{record['node_id']}  {record['name']}  {record['status']}  "
-            f"{record['peer_endpoint']}"
+            f"{record['node_id']}  {record['name']}  {record['status']}  {record['peer_endpoint']}"
         )
-
-
-for command_name in ("revoke",):
-    node_app.command(command_name)(_pending_command(f"node {command_name}"))
-
-
-for child_app, names in (
-    (file_app, ("add", "list")),
-    (share_app, ("inbox",)),
-    (transfer_app, ("list", "status", "resume", "cancel")),
-    (relay_app, ("serve",)),
-):
-    for command_name in names:
-        child_app.command(command_name)(_pending_command(command_name))
 
 
 @app.command("doctor")
@@ -313,7 +312,9 @@ def doctor(as_json: bool = typer.Option(False, "--json")) -> None:
         "state_dir_exists": state_exists,
         "transport_mode": config.transport_mode,
         "relay_configured": config.relay_url is not None,
-        "overall": "INCOMPLETE",
+        "overall": "ENROLLED"
+        if (config.state_dir / "node" / "node-cert.pem").exists()
+        else "UNREGISTERED",
     }
     if as_json:
         typer.echo(json.dumps(result, sort_keys=True))
@@ -340,8 +341,7 @@ def file_list(
 ) -> None:
     for manifest in _node_service(state_dir).list_files():
         typer.echo(
-            f"{manifest.file_id}  {manifest.display_name}  "
-            f"{manifest.size}  {manifest.sha256}"
+            f"{manifest.file_id}  {manifest.display_name}  {manifest.size}  {manifest.sha256}"
         )
 
 
@@ -352,12 +352,25 @@ def share_create(
     ttl: str = typer.Option("30m", "--ttl"),
     admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
+    coordinator: str | None = typer.Option(None, "--coordinator"),
 ) -> None:
     node = _node_service(state_dir)
     metadata = node.load_metadata()
-    with _admin_client(state_dir, admin_url) as client:
-        share = client.create_share(
-            UUID(file_id), metadata.node_id, UUID(to), _parse_duration(ttl)
+    if coordinator is None:
+        raise BarnError(ErrorCode.CONFIGURATION, "Share create requires --coordinator")
+    if not any(str(item.file_id) == file_id for item in node.list_files()):
+        raise BarnError(ErrorCode.INVALID_REQUEST, "File is not managed by this node")
+    with CoordinatorClient(coordinator, node.state_dir / "barn-ca.pem") as client:
+        share = client.signed(
+            node,
+            "POST",
+            "/v1/shares",
+            {
+                "file_id": file_id,
+                "source_node_id": str(metadata.node_id),
+                "recipient_node_id": to,
+                "ttl_seconds": int(_parse_duration(ttl).total_seconds()),
+            },
         )
     typer.echo(f"Share ID: {share['share_id']}")
     typer.echo(f"Expires at: {share['expires_at']}")
@@ -367,9 +380,15 @@ def share_create(
 def share_list(
     admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
+    coordinator: str | None = typer.Option(None, "--coordinator"),
 ) -> None:
-    with _admin_client(state_dir, admin_url) as client:
-        shares = client.list_shares()
+    if coordinator:
+        node = _node_service(state_dir)
+        with CoordinatorClient(coordinator, node.state_dir / "barn-ca.pem") as client:
+            shares = client.signed(node, "GET", "/v1/shares")
+    else:
+        with _admin_client(state_dir, admin_url) as client:
+            shares = client.list_shares()
     for share in shares:
         typer.echo(
             f"{share['share_id']}  {share['file_id']}  {share['recipient_node_id']}  "
@@ -382,9 +401,15 @@ def share_revoke(
     share_id: str,
     admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
+    coordinator: str | None = typer.Option(None, "--coordinator"),
 ) -> None:
-    with _admin_client(state_dir, admin_url) as client:
-        client.revoke_share(UUID(share_id))
+    if coordinator:
+        node = _node_service(state_dir)
+        with CoordinatorClient(coordinator, node.state_dir / "barn-ca.pem") as client:
+            client.signed(node, "POST", f"/v1/shares/{UUID(share_id)}/revoke")
+    else:
+        with _admin_client(state_dir, admin_url) as client:
+            client.revoke_share(UUID(share_id))
     typer.echo(f"Revoked share {share_id}")
 
 
@@ -396,13 +421,164 @@ def share_fetch(
     ca_cert: Path = typer.Option(..., "--ca-cert"),
     admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
+    coordinator: str | None = typer.Option(None, "--coordinator"),
+    mode: str | None = typer.Option(None, "--mode"),
+    relay_url: str | None = typer.Option(None, "--relay-url"),
+    relay_ca_cert: Path | None = typer.Option(None, "--relay-ca-cert"),
 ) -> None:
     node = _node_service(state_dir)
-    with _admin_client(state_dir, admin_url) as admin:
-        grant = admin.issue_grant(UUID(share_id), node.load_metadata().node_id)
-    with PeerClient(source, ca_cert.expanduser().resolve()) as peer:
-        destination = peer.download(node, grant, output)
+    if coordinator is None:
+        raise BarnError(ErrorCode.CONFIGURATION, "Share fetch requires --coordinator")
+    config = load_config()
+    mode = mode or config.transport_mode
+    relay_url = relay_url or config.relay_url
+    if mode not in ("direct", "auto", "relay") or (mode == "relay" and not relay_url):
+        raise BarnError(ErrorCode.CONFIGURATION, "Invalid or unconfigured transport mode")
+    with CoordinatorClient(coordinator, node.state_dir / "barn-ca.pem") as client:
+        grant = client.signed(node, "POST", f"/v1/shares/{UUID(share_id)}/grant")
+        try:
+            if mode == "relay":
+                raise ConnectionError("Relay mode requested")
+            with PeerClient(source, ca_cert.expanduser().resolve()) as peer:
+                destination = peer.download(node, grant, output)
+            path = "direct"
+        except (ConnectionError, OSError, httpx.TransportError):
+            if mode == "direct" or not relay_url:
+                raise BarnError(ErrorCode.CONFIGURATION, "Direct peer connection failed") from None
+            from .node.authority import PeerAuthority
+            from .relay_transport import RelayConnection, relay_download
+
+            ticket = client.signed(node, "POST", f"/v1/shares/{UUID(share_id)}/relay-ticket")
+            connection = RelayConnection(relay_url, node, ticket, ca=relay_ca_cert)
+            destination = relay_download(connection, PeerAuthority(node, client), grant, output)
+            path = "relay"
     typer.echo(f"Exported file to {destination}")
+    typer.echo(f"Transport: {path}")
+    from .config import write_private_json
+
+    write_private_json(
+        node.state_dir / "last-transfer.json",
+        {
+            "transfer_id": grant["transfer_id"],
+            "transport": path,
+            "exported": True,
+        },
+    )
+
+
+@app.command("status")
+def node_status(state_dir: Path | None = typer.Option(None, "--state-dir")) -> None:
+    node = _node_service(state_dir)
+    metadata = node.load_metadata()
+    payload = {
+        "node_id": str(metadata.node_id),
+        "status": str(metadata.status),
+        "barn_id": str(metadata.barn_id) if metadata.barn_id else None,
+    }
+    path = node.state_dir / "last-transfer.json"
+    if path.exists():
+        payload["last_transfer"] = json.loads(path.read_text(encoding="utf-8"))
+    typer.echo(json.dumps(payload, sort_keys=True))
+
+
+@share_app.command("inbox")
+def share_inbox(
+    coordinator: str = typer.Option(..., "--coordinator"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    node = _node_service(state_dir)
+    with CoordinatorClient(coordinator, node.state_dir / "barn-ca.pem") as client:
+        for share in client.signed(node, "GET", "/v1/shares"):
+            typer.echo(json.dumps(share, sort_keys=True))
+
+
+@transfer_app.command("list")
+def transfer_list(state_dir: Path | None = typer.Option(None, "--state-dir")) -> None:
+    from .models import TransferJournal
+
+    for path in sorted((_node_service(state_dir).state_dir / "transfers").glob("*/journal.json")):
+        journal = TransferJournal.model_validate_json(path.read_text(encoding="utf-8"))
+        typer.echo(journal.model_dump_json())
+
+
+@transfer_app.command("status")
+def transfer_status(
+    transfer_id: str, state_dir: Path | None = typer.Option(None, "--state-dir")
+) -> None:
+    from .models import TransferJournal
+
+    path = (
+        _node_service(state_dir).state_dir / "transfers" / str(UUID(transfer_id)) / "journal.json"
+    )
+    if not path.exists():
+        raise BarnError(ErrorCode.INVALID_REQUEST, "Transfer is unavailable")
+    typer.echo(
+        TransferJournal.model_validate_json(path.read_text(encoding="utf-8")).model_dump_json()
+    )
+
+
+@transfer_app.command("cancel")
+def transfer_cancel(
+    transfer_id: str, state_dir: Path | None = typer.Option(None, "--state-dir")
+) -> None:
+    _node_service(state_dir).transfer_control(UUID(transfer_id), cancelled=True)
+    typer.echo(f"Cancelled transfer {transfer_id}")
+
+
+@transfer_app.command("resume")
+def transfer_resume(
+    transfer_id: str, state_dir: Path | None = typer.Option(None, "--state-dir")
+) -> None:
+    _node_service(state_dir).transfer_control(UUID(transfer_id), cancelled=False)
+    typer.echo("Transfer enabled; fetch the same share to resume verified chunks")
+
+
+@relay_app.command("serve")
+def relay_serve(
+    grant_public_key: Path = typer.Option(..., "--grant-public-key"),
+    cert: Path = typer.Option(..., "--cert"),
+    key: Path = typer.Option(..., "--key"),
+    bind: str = typer.Option("0.0.0.0", "--bind"),
+    port: int = typer.Option(443, "--port", min=1, max=65535),
+) -> None:
+    serve_relay(grant_public_key, cert, key, bind, port)
+
+
+@coordinator_app.command("grant-key-export")
+def grant_key_export(
+    output: Path = typer.Option(..., "--output"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    from .crypto import load_private_identity, public_key_bytes
+
+    service = _coordinator_service(state_dir)
+    public_key = public_key_bytes(
+        load_private_identity(service.state_dir / "secrets" / "grant-key.pem").public_key()
+    )
+    with output.open("xb") as handle:
+        handle.write(public_key)
+    typer.echo(f"Exported public grant key to {output}")
+
+
+@coordinator_app.command("audit")
+def coordinator_audit(
+    admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    with _admin_client(state_dir, admin_url) as client:
+        for event in client._payload(client._request("GET", "/local/v1/audit")):
+            typer.echo(json.dumps(event, sort_keys=True))
+
+
+@node_app.command("revoke")
+def node_revoke(
+    node_id: str,
+    admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
+    state_dir: Path | None = typer.Option(None, "--state-dir"),
+) -> None:
+    with _admin_client(state_dir, admin_url) as client:
+        client._payload(client._request("POST", f"/local/v1/nodes/{UUID(node_id)}/revoke"))
+    typer.echo(f"Revoked node {node_id}")
 
 
 @app.command("nodes")
@@ -415,8 +591,7 @@ def nodes(
     payload = json.loads(path.read_text(encoding="utf-8"))
     for record in payload["nodes"]:
         typer.echo(
-            f"{record['node_id']}  {record['name']}  {record['status']}  "
-            f"{record['peer_endpoint']}"
+            f"{record['node_id']}  {record['name']}  {record['status']}  {record['peer_endpoint']}"
         )
 
 
@@ -425,6 +600,12 @@ def main() -> None:
         app()
     except BarnError as exc:
         typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise SystemExit(2) from None
+    except (OSError, ValueError, httpx.HTTPError, WebSocketException, InvalidSignature, InvalidTag):
+        typer.echo(
+            "CONFIGURATION: Operation failed; check paths, network and trusted certificates",
+            err=True,
+        )
         raise SystemExit(2) from None
 
 

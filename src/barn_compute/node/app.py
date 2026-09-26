@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import secrets
+from collections.abc import Callable
 
-from fastapi import Depends, FastAPI, Header, Response
+from fastapi import Depends, FastAPI, Header, Request, Response
 
 from .. import __version__
 from ..api_models import StatusResponse, decode_binary
@@ -15,7 +16,9 @@ from ..models import FileManifest, NodeStatus, TransferGrant
 from .service import NodeService
 
 
-def create_peer_app(service: NodeService) -> FastAPI:
+def create_peer_app(
+    service: NodeService, authorize: Callable[[TransferGrant, Request], None] | None = None
+) -> FastAPI:
     app = FastAPI(title="barnCompute node peer", version=__version__)
     install_http_safety(app)
 
@@ -38,29 +41,36 @@ def create_peer_app(service: NodeService) -> FastAPI:
             payload = json.loads(decode_binary(value))
             payload["signature"] = decode_binary(payload["signature"])
             return TransferGrant.model_validate(payload)
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, KeyError) as exc:
             raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Transfer grant is invalid") from exc
 
     @app.get("/v1/files/{file_id}/manifest", response_model=FileManifest)
     async def manifest(
+        request: Request,
         file_id: str,
         x_barn_transfer_grant: str | None = Header(None),
     ) -> FileManifest:
         grant = grant_from_header(x_barn_transfer_grant)
+        service._verify_transfer_grant(grant)
+        if authorize is None:
+            raise BarnError(ErrorCode.CONFIGURATION, "Peer coordinator authority is unavailable")
+        authorize(grant, request)
         if str(grant.file_id) != file_id:
             raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant file scope is invalid")
-        try:
-            return next(item for item in service.list_files() if item.file_id == grant.file_id)
-        except StopIteration as exc:
-            raise BarnError(ErrorCode.INVALID_REQUEST, "Managed file is unavailable") from exc
+        return service.grant_manifest(grant)
 
     @app.get("/v1/files/{file_id}/chunks/{index}")
     async def chunk(
+        request: Request,
         file_id: str,
         index: int,
         x_barn_transfer_grant: str | None = Header(None),
     ) -> Response:
         grant = grant_from_header(x_barn_transfer_grant)
+        service._verify_transfer_grant(grant)
+        if authorize is None:
+            raise BarnError(ErrorCode.CONFIGURATION, "Peer coordinator authority is unavailable")
+        authorize(grant, request)
         if str(grant.file_id) != file_id:
             raise BarnError(ErrorCode.NOT_AUTHORISED, "Grant file scope is invalid")
         return Response(

@@ -38,9 +38,13 @@ def canonical_relay_ticket(
     recipient_node_id: UUID,
     issued_at: datetime,
     expires_at: datetime,
+    source_identity_key: str,
+    recipient_identity_key: str,
 ) -> bytes:
     payload = {
         "domain": "barn-relay-ticket-v1",
+        "source_identity_key": source_identity_key,
+        "recipient_identity_key": recipient_identity_key,
         "ticket_id": str(ticket_id),
         "barn_id": str(barn_id),
         "source_node_id": str(source_node_id),

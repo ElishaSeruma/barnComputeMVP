@@ -7,9 +7,10 @@ import os
 import stat
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from platformdirs import user_config_path, user_data_path
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .errors import BarnError, ErrorCode
 
@@ -20,6 +21,18 @@ class BarnConfig(BaseModel):
     state_dir: Path
     transport_mode: str = Field(default="auto", pattern="^(auto|direct|relay)$")
     relay_url: str | None = None
+
+    @field_validator("relay_url")
+    @classmethod
+    def require_safe_relay(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        if parsed.scheme != "wss" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("Relay URL must use WSS without credentials")
+        if parsed.query or parsed.fragment:
+            raise ValueError("Relay URL must not contain query parameters or a fragment")
+        return value
 
 
 def default_state_dir() -> Path:
@@ -66,7 +79,7 @@ def load_config(path: Path | None = None) -> BarnConfig:
     try:
         return BarnConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        raise BarnError(ErrorCode.CONFIGURATION, f"Invalid config at {config_path}: {exc}") from exc
+        raise BarnError(ErrorCode.CONFIGURATION, f"Invalid config at {config_path}") from exc
 
 
 def save_config(config: BarnConfig, path: Path | None = None) -> Path:

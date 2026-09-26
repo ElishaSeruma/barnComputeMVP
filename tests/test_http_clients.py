@@ -18,6 +18,13 @@ def test_admin_client_authenticates_and_maps_safe_errors(tmp_path: Path) -> None
     secrets = tmp_path / "secrets"
     secrets.mkdir()
     (secrets / "admin.token").write_text("private-token", encoding="ascii")
+    for unsafe in (
+        "http://remote.example:8754",
+        "http://127.0.0.1@remote.example",
+        "http://127.0.0.1:8754/?token=secret",
+    ):
+        with pytest.raises(BarnError, match="loopback"):
+            CoordinatorAdminClient(tmp_path, unsafe)
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer private-token"
@@ -32,10 +39,13 @@ def test_admin_client_authenticates_and_maps_safe_errors(tmp_path: Path) -> None
             },
         )
 
-    with CoordinatorAdminClient(
-        tmp_path,
-        "http://127.0.0.1:8754",
-        transport=httpx.MockTransport(handler),
-    ) as client, pytest.raises(BarnError, match="Admin token is invalid") as error:
+    with (
+        CoordinatorAdminClient(
+            tmp_path,
+            "http://127.0.0.1:8754",
+            transport=httpx.MockTransport(handler),
+        ) as client,
+        pytest.raises(BarnError, match="Admin token is invalid") as error,
+    ):
         client.list_enrolments()
     assert error.value.code is ErrorCode.NOT_AUTHENTICATED

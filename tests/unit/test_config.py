@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from barn_compute.config import BarnConfig, load_config, save_config
+from barn_compute.errors import BarnError
 
 
 def test_config_round_trip(tmp_path) -> None:
@@ -24,4 +25,12 @@ def test_config_round_trip(tmp_path) -> None:
 def test_transport_mode_is_validated(tmp_path) -> None:
     with pytest.raises(ValidationError):
         BarnConfig(state_dir=tmp_path, transport_mode="plaintext")
-
+    malformed = BarnConfig.model_construct(
+        state_dir=tmp_path, relay_url="wss://private-user:private-password@relay.example/v1/tunnel"
+    )
+    path = tmp_path / "invalid-config.json"
+    save_config(malformed, path)
+    with pytest.raises(BarnError) as failure:
+        load_config(path)
+    assert "private-user" not in failure.value.message
+    assert "private-password" not in failure.value.message

@@ -14,8 +14,12 @@ creation, challenge-bound proof of possession, pending enrolments, explicit
 approval/rejection, node certificate issuance and verification, initial tests,
 public HTTPS enrolment, receipt-bound polling, loopback-only administration,
 node health endpoints, initial tests, and Windows/macOS CI definition are
-implemented. Heartbeat, managed-file transfer, relay operation, and physical
-cross-platform acceptance are **not yet complete**.
+implemented. Heartbeats, managed-file storage, signed remote shares, recipient
+authenticated HTTPS transfers, journal recovery, and encrypted WSS relay
+transfers now have executable implementations and real local network tests.
+M1 acceptance still requires the final Mac rerun, public relay testing, and
+TestPyPI installation evidence. Follow
+[the M1 acceptance runbook](docs/M1_ACCEPTANCE_RUNBOOK.md) for setup and commands.
 
 ## M1 goal
 
@@ -137,21 +141,22 @@ barn node enroll --coordinator https://<COORDINATOR>:8443 --ca-cert <CA_FILE> --
 barn coordinator enrolments
 barn coordinator approve <REQUEST_ID>
 barn node enrolment-status --coordinator https://<COORDINATOR>:8443 --ca-cert <CA_FILE>
-barn node start --bind 0.0.0.0 --peer-port 8445
+barn node start --coordinator https://<COORDINATOR>:8443 --bind 0.0.0.0 --peer-port 8445
 
 barn nodes
 barn doctor
 barn file add <LOCAL_FILE>
-barn share create <FILE_ID> --to <NODE_ID> --ttl 30m
-barn share inbox
-barn share fetch <SHARE_ID> --output <LOCAL_DESTINATION>
+barn share create <FILE_ID> --to <NODE_ID> --ttl 30m --coordinator https://<COORDINATOR>:8443
+barn share inbox --coordinator https://<COORDINATOR>:8443
+barn share fetch <SHARE_ID> --coordinator https://<COORDINATOR>:8443 --source https://<SOURCE>:8445 --ca-cert <CA_FILE> --output <LOCAL_DESTINATION>
 barn transfer status <TRANSFER_ID>
 ```
 
 Relay-related interfaces are expected to include equivalents of:
 
 ```text
-barn relay serve --config <PATH>
+barn coordinator grant-key-export --output ./grant-public.key
+barn relay serve --grant-public-key ./grant-public.key --cert <RELAY_CERT> --key <RELAY_KEY>
 barn config set relay.url wss://<RELAY_DOMAIN>/v1/tunnel
 barn config set transport.mode auto
 ```

@@ -1,6 +1,31 @@
 # M1 architecture
 
-Status: initial decision record; implementation is incomplete.
+Status: implemented development runtime; public deployment and released
+physical acceptance remain pending. Historical foundation decisions below are
+retained; current operational instructions are in `M1_ACCEPTANCE_RUNBOOK.md`.
+
+## Live services
+
+The coordinator public HTTPS API now carries member-signed share and relay
+control requests. Each node agent refreshes heartbeat/registry and uses the
+coordinator as current authority before serving a file. Direct peer requests
+also require recipient signature and persistent replay protection.
+
+For relay transfers, the recipient creates a signed pair ticket; the source
+agent polls its ticket inbox and opens an outbound verified WSS connection.
+An independent relay pairs the sockets by ticket UUID. Each node proves its
+enrolled identity at admission, then establishes an encrypted inner session
+with its peer. Bounded RPCs transport manifest/chunks with the same grants,
+journals, hashes, and destination rules as direct HTTPS.
+
+SQLite schema version 5 adds durable relay tickets without deleting existing
+coordinator state. Renewal keeps a stable share/transfer UUID. Existing
+pre-integration journals with random transfer UUIDs cannot automatically map
+to the new stable identifier; preserve their state and fetch the share under
+the new journal. The owner can archive old disposable test state after review.
+
+Production nodes require coordinator HTTPS reachability for revocation checks,
+even when file data uses relay. M1 does not implement a coordinator proxy.
 
 ## Boundaries
 

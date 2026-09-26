@@ -13,7 +13,7 @@ Physical matrix F01-F24: NOT RUN
 SHA-256 Mac-to-Windows: NOT RUN
 SHA-256 Windows-to-Mac: NOT RUN
 Measured resume behaviour, memory, network failures: NOT RUN
-Known issues and blocking defects: peer file transfer, share HTTP/CLI surfaces, and relay implementation remain incomplete; physical network integration and full M1 security verification remain outstanding
+Known issues and blocking defects: final Mac rerun, public relay deployment, physical two-host acceptance, and TestPyPI provenance remain outstanding. Live coordinator HTTPS reachability is required during direct and relay delivery.
 Release verdict: NOT YET RUN
 Human reviewer and UTC date: NOT RUN
 
@@ -98,3 +98,28 @@ coverage). Session hellos sign the node UUID, ephemeral X25519 public key, and
 transcript with the enrolled Ed25519 identity; forged identity and transcript
 cases are rejected. Detailed macOS evidence is in
 `docs/mac_test_results/2026-09-26-identity-bound-handshake.md`.
+
+## Integrated runtime checkpoint - 2026-09-26
+
+Windows source suite: 82 PASS, no skips, 343.01 seconds, 82% source coverage.
+Independent installed-wheel suite: 81 PASS, one initial symlink skip, 348.11
+seconds, 82% coverage. The Windows junction fallback subsequently passed in
+the complete source suite. A final config-error redaction adjustment passed
+both focused config tests after those full runs.
+
+Ruff, wheel/sdist build, Twine validation, archive screening and clean-wheel
+import/CLI checks passed. Real local TLS/WSS integration covers 100 MiB direct
+and relay transfers in both logical directions, matching SHA-256, resumed
+chunks, automatic failover, signed recipient/relay authentication and revocation.
+Additional coverage includes durable audit, cancellation, managed copies,
+concurrent no-clobber export and listener shutdown.
+
+Full evidence: `WINDOWS_M1_RUNTIME_VERIFICATION.md`. Mac rerun and deployment
+instructions: `M1_ACCEPTANCE_RUNBOOK.md` and
+`mac_instructions/2026-09-26-integrated-m1.md`.
+
+Mac verification of this checkpoint, public relay, physical two-host resource
+measurements and TestPyPI installation provenance remain NOT RUN. Historical
+checkpoint gaps above are superseded by this runtime checkpoint, not evidence
+of physical acceptance. Release verdict remains NOT YET RUN; M1 is not accepted
+until those external gates pass.

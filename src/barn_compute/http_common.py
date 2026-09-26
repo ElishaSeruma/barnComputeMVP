@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
@@ -28,11 +29,27 @@ ERROR_STATUS = {
 
 
 class RequestSizeMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app):
+        super().__init__(app)
+        self.windows: dict[str, tuple[float, int]] = {}
+
     async def dispatch(
         self,
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
+        now = time.monotonic()
+        address = request.client.host if request.client else "unknown"
+        self.windows = {host: entry for host, entry in self.windows.items() if now - entry[0] < 60}
+        started, count = self.windows.get(address, (now, 0))
+        if count >= 1200 or (address not in self.windows and len(self.windows) >= 1024):
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": {"code": "INVALID_REQUEST", "message": "Request rate limit exceeded"}
+                },
+            )
+        self.windows[address] = (started, count + 1)
         content_length = request.headers.get("content-length")
         if content_length is not None:
             try:
@@ -58,6 +75,22 @@ class RequestSizeMiddleware(BaseHTTPMiddleware):
                         }
                     },
                 )
+        chunks = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_JSON_BODY:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "error": {
+                            "code": "PAYLOAD_TOO_LARGE",
+                            "message": "Request body is too large",
+                        }
+                    },
+                )
+            chunks.append(chunk)
+        request._body = b"".join(chunks)
         return await call_next(request)
 
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
@@ -20,9 +22,21 @@ class CoordinatorAdminClient:
         timeout: float = 5.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        token = (state_dir / "secrets" / "admin.token").read_text(
-            encoding="ascii"
-        ).strip()
+        parsed = urlsplit(base_url)
+        try:
+            loopback = ip_address(parsed.hostname or "").is_loopback
+        except ValueError:
+            loopback = False
+        if (
+            not loopback
+            or parsed.scheme != "http"
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise BarnError(ErrorCode.CONFIGURATION, "Admin URL must use a loopback HTTP IP")
+        token = (state_dir / "secrets" / "admin.token").read_text(encoding="ascii").strip()
         self.client = httpx.Client(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {token}"},
@@ -64,8 +78,7 @@ class CoordinatorAdminClient:
 
     def create_invite(self, ttl: timedelta) -> dict[str, object]:
         response = self._request(
-            "POST",
-            "/local/v1/invites", json={"ttl_seconds": int(ttl.total_seconds())}
+            "POST", "/local/v1/invites", json={"ttl_seconds": int(ttl.total_seconds())}
         )
         return dict(self._payload(response))
 

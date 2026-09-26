@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import ssl
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import httpx
+from cryptography import x509
+from cryptography.x509.oid import NameOID
 
 from ..api_models import decode_binary, encode_binary
 from ..auth import sign_request
@@ -37,7 +40,9 @@ class CoordinatorClient:
             raise BarnError(ErrorCode.CONFIGURATION, "Coordinator URL must use HTTPS")
         self.client = httpx.Client(
             base_url=base_url.rstrip("/"),
-            verify=str(ca_certificate),
+            verify=ssl.create_default_context(cafile=str(ca_certificate))
+            if transport is None
+            else True,
             timeout=httpx.Timeout(timeout, connect=min(timeout, 5.0)),
             follow_redirects=False,
             transport=transport,
@@ -168,13 +173,30 @@ class CoordinatorClient:
 
     def refresh_registry(self, node: NodeService) -> dict[str, object]:
         target = "/v1/nodes"
-        response = self.client.get(
-            target, headers=self._signed_headers(node, "GET", target, b"")
-        )
+        response = self.client.get(target, headers=self._signed_headers(node, "GET", target, b""))
         self._raise_for_error(response)
         payload = dict(response.json())
         node.store_registry(payload)
         return payload
+
+    def signed(self, node: NodeService, method: str, target: str, payload: dict | None = None):
+        body = json.dumps(payload, separators=(",", ":")).encode() if payload is not None else b""
+        response = self.client.request(
+            method,
+            target,
+            content=body,
+            headers={
+                **self._signed_headers(node, method, target, body),
+                "Content-Type": "application/json",
+            },
+        )
+        self._raise_for_error(response)
+        return response.json() if response.content else None
+
+    def peer_key(self, node: NodeService, peer_id: UUID) -> bytes:
+        return decode_binary(
+            self.signed(node, "GET", f"/v1/nodes/{peer_id}/identity")["identity_public_key"]
+        )
 
 
 class PeerClient:
@@ -186,11 +208,14 @@ class PeerClient:
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        self.injected_transport = transport is not None
         if not base_url.startswith("https://") and transport is None:
             raise BarnError(ErrorCode.CONFIGURATION, "Peer URL must use HTTPS")
         self.client = httpx.Client(
             base_url=base_url.rstrip("/"),
-            verify=str(ca_certificate),
+            verify=ssl.create_default_context(cafile=str(ca_certificate))
+            if transport is None
+            else True,
             timeout=httpx.Timeout(timeout, connect=min(timeout, 5.0)),
             follow_redirects=False,
             transport=transport,
@@ -239,17 +264,46 @@ class PeerClient:
             expires_at=grant_payload["expires_at"],
             signature=decode_binary(str(grant_payload["signature"])),
         )
+        target = f"/v1/files/{grant.file_id}/manifest"
         header = {"X-Barn-Transfer-Grant": self._grant_header(grant_payload)}
-        response = self.client.get(f"/v1/files/{grant.file_id}/manifest", headers=header)
+        response = self.client.get(
+            target,
+            headers={**header, **CoordinatorClient._signed_headers(node, "GET", target, b"")},
+        )
         self._raise_for_error(response)
+        if not self.injected_transport:
+            stream = response.extensions.get("network_stream")
+            tls = stream.get_extra_info("ssl_object") if stream else None
+            certificate = (
+                x509.load_der_x509_certificate(tls.getpeercert(True)) if tls else None
+            )
+            identifiers = (
+                certificate.subject.get_attributes_for_oid(NameOID.ORGANIZATIONAL_UNIT_NAME)
+                if certificate
+                else []
+            )
+            if len(identifiers) != 1 or identifiers[0].value != str(grant.source_node_id):
+                raise BarnError(
+                    ErrorCode.NOT_AUTHENTICATED, "TLS peer identity differs from source"
+                )
         manifest = FileManifest.model_validate(response.json())
         journal = node.start_transfer(grant, manifest)
         for chunk in manifest.chunks:
             if chunk.index in journal.completed_chunks:
                 continue
-            response = self.client.get(
-                f"/v1/files/{grant.file_id}/chunks/{chunk.index}", headers=header
-            )
-            self._raise_for_error(response)
-            journal = node.accept_transfer_chunk(grant, manifest, chunk.index, response.content)
+            target = f"/v1/files/{grant.file_id}/chunks/{chunk.index}"
+            with self.client.stream(
+                "GET",
+                target,
+                headers={**header, **CoordinatorClient._signed_headers(node, "GET", target, b"")},
+            ) as response:
+                if not response.is_success:
+                    response.read()
+                    self._raise_for_error(response)
+                payload = bytearray()
+                for block in response.iter_bytes(64 * 1024):
+                    payload.extend(block)
+                    if len(payload) > chunk.length:
+                        raise BarnError(ErrorCode.INVALID_REQUEST, "Peer chunk exceeds manifest")
+            journal = node.accept_transfer_chunk(grant, manifest, chunk.index, bytes(payload))
         return node.export_transfer(grant, manifest, destination)
