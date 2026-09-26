@@ -4,7 +4,7 @@ Release candidate: 0.1.0a1
 Distribution index: TestPyPI (https://test.pypi.org/simple/)
 TestPyPI release page: NOT PUBLISHED
 Wheel file/SHA-256: earlier macOS local wheel `69d8d2c6ffb8e3ef779bdd358b2f5dda47b048f271b3e6a600e2a34c081717e3`; earlier macOS local sdist `d959e6b40969882ed0fb5eb532a8b11810a3799409b090e137effe317afcb351`; coordinator-bootstrap macOS wheel `390c3084745cd48daacbbfe1b2c36120153709ba585bfc5bc55d179e90beab04`; coordinator-bootstrap macOS sdist `1164df43aba1fcd88f3407d7dd13ab4bf324abb34443db881ae195c58f500fe8`; node-enrolment macOS checkpoint wheel `6bad221e509a057f8e08b35430144b0429d0e3ca7adbdb95b86deea7d346cc0d` and sdist `f0725b60d5e128edcf78f63afc4853a151d7d938b3eaac591432c4a2855cd8fa`; HTTPS/admin macOS checkpoint at `fa13622` wheel `60a14cdea34851c3b83dc72519de9cbbd958cdb8211a157d1fc1fdbdebea81d1` and sdist `d14757b25236330ffbe483b0cabdaaaa8f2baf92b207727917db63eae5b50357`; none is a TestPyPI acceptance artifact
-macOS version/architecture/Python/pip: macOS 26.6 (build 25G5028f), arm64 (Apple Silicon), Python 3.12.14, pip 26.2.1; detailed evidence in `docs/mac_test_results/2026-09-25-node-enrolment-38.md`, `docs/mac_test_results/2026-09-25-https-admin-43.md`, `docs/mac_test_results/2026-09-26-heartbeat-registry.md`, `docs/mac_test_results/2026-09-26-managed-file-import.md`, `docs/mac_test_results/2026-09-26-share-grants.md`, `docs/mac_test_results/2026-09-26-peer-delivery.md`, `docs/mac_test_results/2026-09-26-transfer-journals.md`, `docs/mac_test_results/2026-09-26-share-control-plane.md`, and `docs/mac_test_results/2026-09-26-live-download.md`
+macOS version/architecture/Python/pip: macOS 26.6 (build 25G5028f), arm64 (Apple Silicon), Python 3.12.14, pip 26.2.1; detailed evidence in `docs/mac_test_results/2026-09-25-node-enrolment-38.md`, `docs/mac_test_results/2026-09-25-https-admin-43.md`, `docs/mac_test_results/2026-09-26-heartbeat-registry.md`, `docs/mac_test_results/2026-09-26-managed-file-import.md`, `docs/mac_test_results/2026-09-26-share-grants.md`, `docs/mac_test_results/2026-09-26-peer-delivery.md`, `docs/mac_test_results/2026-09-26-transfer-journals.md`, `docs/mac_test_results/2026-09-26-share-control-plane.md`, `docs/mac_test_results/2026-09-26-live-download.md`, and `docs/mac_test_results/2026-09-26-relay-policy.md`
 Windows version/architecture/Python/pip: local foundation checks passed on Python 3.12.10; exact Windows, architecture, and pip versions NOT RECORDED
 Coordinator and Node IDs: disposable coordinator initialization and public-CA export PASS; matching fingerprints, CA without private-key material, and duplicate-initialization rejection PASS. macOS node-enrolment checkpoint PASS: disposable node initialization produced `UNREGISTERED` state and expected files; duplicate node initialization returned `CONFIGURATION`, exit code 2, no traceback, and preserved the Node ID.
 Installation provenance on each host: NOT RUN
@@ -60,7 +60,10 @@ Detailed macOS evidence is in `docs/mac_test_results/2026-09-26-live-download.md
 Relay behavior remains NOT RUN.
 
 Relay policy checkpoint: Windows PASS on 2026-09-26 with Ruff PASS, 60 tests
-PASS, and 79% coverage. Coverage includes fail-closed `direct`, `relay`, and
-`auto` selection plus direct-to-relay fallback rules. A deployed WSS relay,
+PASS, and 79% coverage. macOS PASS at `084c2a9` on 2026-09-26: pytest import
+PASS (pytest 8.4.2); Ruff PASS; full suite PASS (60 tests in 3.73s, 79%
+coverage). Coverage includes fail-closed `direct`, `relay`, and `auto`
+selection plus direct-to-relay fallback rules. Detailed macOS evidence is in
+`docs/mac_test_results/2026-09-26-relay-policy.md`. A deployed WSS relay,
 admission protocol, inner protected session, and physical relay failover remain
 NOT RUN.
