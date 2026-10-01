@@ -1,5 +1,78 @@
 # barnCompute M1 TestPyPI acceptance report
 
+## Current verdict - 2026-10-01
+
+**M1 NOT ACCEPTED: closure gates C3-C5 remain open.** C1 and C2 pass. This section is the
+canonical current status. Checkpoints below the historical divider describe
+their own dates and do not override this verdict.
+
+Release: `barnCompute==0.1.0a1`, published to
+[TestPyPI](https://test.pypi.org/project/barnCompute/0.1.0a1/).
+Publication and artifact details are recorded in the
+[physical handoff](M1_PHYSICAL_TEST_HANDOFF_2026-09-29.md) and
+[physical results](M1_PHYSICAL_TEST_RESULTS_2026-09-29.md); publication was not
+independently rechecked online during this documentation reconciliation.
+
+- Published wheel SHA-256: `f1cbc28f916749b15cc46a2e5ab7760ad27d9693153c76e36ec2d070f85acd86`.
+- Published sdist SHA-256: `ab32556fa838cb3ed886d77f409a3edefd39550a0ec0f6cfa3c847087378c8b9`.
+- The September 29 environments matched 30 checked wheel entries, excluding
+  `RECORD`; that established content equivalence only. Fresh October 1 installs
+  now establish retained installation provenance on both hosts (see C2 below).
+- Documentation baseline: `415786816a1b6087e2b86d947be4957e27ab99fe`.
+
+### Evidence matrix
+
+PASS means the cited check passed; FAIL means an observed failed check;
+INCOMPLETE means some required evidence exists but the gate is unmet;
+NOT RUN means the required acceptance scenario has no recorded run.
+
+| Check | Status | Evidence and limits |
+| --- | --- | --- |
+| TestPyPI publication | PASS | Published hashes recorded in the dated handoff and physical results. |
+| Installed package content, both hosts | PASS | Same published wheel matched installed files; original installer logs absent. |
+| Clean TestPyPI installation provenance | PASS | [2026-10-01 C2 run](M1_C2_PROVENANCE_2026-10-01.md): both hosts have fresh installs, retained source logs, matching wheel/content, `pip check`, version and HTTPS smoke. Mac evidence is owner-shared terminal output; its logs remain on that host. |
+| Windows local automation | PASS | [Fresh baseline](M1_BASELINE_2026-09-30.md) at `4157868`: Ruff, 82 tests, no failures/skips, 82% coverage, 500.87 seconds; build, Twine and existing archive screen passed. [Historical Windows verification](WINDOWS_M1_RUNTIME_VERIFICATION.md) retained. |
+| macOS local automation | PASS (historical) | [Mac verification](mac_test_results/2026-09-26-integrated-m1-acceptance-local.md): 82 passed, 82% coverage at `842bc31`; packaging and clean-wheel checks passed. No fresh Mac run claimed. |
+| Physical trust, enrolment and connectivity | PASS | CA fingerprint agreement, explicit approval, ONLINE registry and peer TCP checks in physical results. Mac pending-list output was not captured. |
+| Physical direct 100 MiB, both directions | PASS | Matching full SHA-256; Windows-to-Mac succeeded after an initial failed attempt. |
+| Initial Windows-to-Mac attempt | FAIL (retry passed) | `CONFIGURATION: Direct peer connection failed`; root cause not established. Retain as a known observation. |
+| Boundary files and no-clobber | PASS | 0 B, 1 B, 1 MiB and 1 MiB+1 B; existing destination preserved. |
+| Recovery and cancellation | PASS | Missing/corrupt chunk repair, interrupted transfer across coordinator/agent restart, incomplete-transfer cancellation/resume. Chunk timestamps support saved-chunk reuse; peer request logs were not retained. |
+| Physical authorization denials | PASS | Expired, revoked and wrong-recipient shares; disposable node revocation. |
+| Concurrent physical direct transfers | PASS | Overlapping bidirectional 100 MiB transfers with matching hashes. |
+| Synchronized resource observations | RETEST REQUIRED | [2026-10-01 C3 run](M1_C3_RESOURCE_RESULTS_2026-10-01.md): synchronized bidirectional retry passed with matching hashes and bounded sampled memory, but each completed transfer retained a 100 MiB `assembled.tmp`. Source fix and corrected-artifact physical rerun required. |
+| Deployed public relay acceptance | NOT RUN | Forced relay, failover/resume, outage/recovery, ticket/peer denial and relay revocation evidence still required. |
+| Client-isolated control/data fallback | LOCAL PASS / PHYSICAL NOT RUN | [C5 implementation record](M1_C5_CONTROL_PATH_2026-10-01.md): outbound authenticated control, existing signed/replay-checked RPC and local isolation/outage/recovery tests pass in unpublished `0.1.0a2`; public two-device test remains. |
+
+The full physical evidence, including timestamps, identifiers, hashes and
+measurement limitations, remains unchanged in
+[M1_PHYSICAL_TEST_RESULTS_2026-09-29.md](M1_PHYSICAL_TEST_RESULTS_2026-09-29.md).
+
+### Closure gates
+
+| Gate | Status | Exact remaining work |
+| --- | --- | --- |
+| C1 - reconcile documentation | PASS | Current report and next steps reconcile publication and physical evidence while retaining dated records. |
+| C2 - installation provenance | PASS | Windows and Mac passed on 2026-10-01; see the dated C2 record for scope and retained evidence. |
+| C3 - synchronized resources | RETEST REQUIRED | Physical measurements completed, exposing unbounded retained assembly files. Verify the cleanup fix with a newly identified artifact and repeat the synchronized run. |
+| C4 - public relay | NOT RUN | Approved host, DNS and verified TLS on 443; complete physical relay/security/recovery matrix. |
+| C5 - isolated-network control path | INCOMPLETE (source implemented) | Local authenticated outbound control tests pass in `0.1.0a2`; prove control and data operations physically with all cross-device LAN paths unavailable. |
+
+See [the closure specification](M1_CLOSURE_AND_GATE.md) for full pass conditions
+and [the current baseline record](M1_BASELINE_2026-09-30.md) for this slice's
+source inspection and fresh check results. No physical gate was rerun here.
+Any code correction needs its own tested artifact identity; the published
+`0.1.0a1` must not be overwritten or credited with later behavior.
+
+M2 development may proceed alongside closure work. Its inherited network/security
+gates must pass before `0.2.0a1` publication/acceptance under the new plan.
+Human acceptance review remains pending.
+
+## Historical checkpoints (superseded status, preserved evidence)
+
+The text below is retained for traceability. Claims such as NOT PUBLISHED,
+physical NOT RUN, or pending Mac reruns describe earlier checkpoints only.
+
 Release candidate: 0.1.0a1
 Distribution index: TestPyPI (https://test.pypi.org/simple/)
 TestPyPI release page: NOT PUBLISHED

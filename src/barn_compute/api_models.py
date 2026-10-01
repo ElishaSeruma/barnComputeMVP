@@ -59,6 +59,7 @@ class ResultResponse(StrictModel):
     certificate_pem: str | None = None
     ca_certificate_pem: str | None = None
     grant_public_key: str | None = None
+    control_grant: dict[str, object] | None = None
     decided_at: datetime | None = None
 
 

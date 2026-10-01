@@ -62,6 +62,16 @@ class EnrolmentReceipt(StrictModel):
     status: EnrolmentStatus
 
 
+class ControlGrant(StrictModel):
+    grant_id: UUID
+    barn_id: UUID
+    node_id: UUID
+    node_identity_key: str
+    issued_at: datetime
+    expires_at: datetime
+    signature: bytes = Field(min_length=64, max_length=64)
+
+
 class EnrolmentResult(StrictModel):
     request_id: UUID
     status: EnrolmentStatus
@@ -69,6 +79,7 @@ class EnrolmentResult(StrictModel):
     certificate_pem: bytes | None = None
     ca_certificate_pem: bytes | None = None
     grant_public_key: bytes | None = None
+    control_grant: ControlGrant | None = None
     decided_at: datetime | None = None
 
 
@@ -161,6 +172,7 @@ class RelayTicket(StrictModel):
     issued_at: datetime
     expires_at: datetime
     signature: bytes = Field(min_length=64, max_length=64)
+
 
 class Heartbeat(StrictModel):
     protocol_version: str = PROTOCOL_VERSION

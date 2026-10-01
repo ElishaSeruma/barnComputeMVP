@@ -14,6 +14,7 @@ from cryptography.x509.oid import NameOID
 
 from ..api_models import decode_binary, encode_binary
 from ..auth import sign_request
+from ..control_transport import parse_control_grant
 from ..crypto import load_private_identity
 from ..errors import BarnError, ErrorCode
 from ..models import (
@@ -35,6 +36,8 @@ class CoordinatorClient:
         *,
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
+        relay_url: str | None = None,
+        relay_ca: Path | None = None,
     ) -> None:
         if not base_url.startswith("https://") and transport is None:
             raise BarnError(ErrorCode.CONFIGURATION, "Coordinator URL must use HTTPS")
@@ -47,8 +50,14 @@ class CoordinatorClient:
             follow_redirects=False,
             transport=transport,
         )
+        self.relay_url = relay_url
+        self.relay_ca = relay_ca
+        self.control = None
 
     def close(self) -> None:
+        if self.control is not None:
+            self.control.close()
+            self.control = None
         self.client.close()
 
     def __enter__(self) -> CoordinatorClient:
@@ -69,6 +78,37 @@ class CoordinatorClient:
             code = ErrorCode.INVALID_REQUEST
             message = f"Coordinator returned HTTP {response.status_code}"
         raise BarnError(code, message)
+
+    def _request(
+        self,
+        node: NodeService,
+        method: str,
+        target: str,
+        *,
+        content: bytes = b"",
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        if self.control is not None:
+            try:
+                return self.control.request(method, target, headers or {}, content)
+            except BarnError:
+                self.control.close()
+                self.control = None
+        try:
+            return self.client.request(method, target, content=content, headers=headers)
+        except httpx.TransportError:
+            if self.relay_url is None:
+                raise
+        from ..control_transport import ControlConnection
+
+        if self.control is None:
+            self.control = ControlConnection(self.relay_url, node, ca=self.relay_ca)
+        try:
+            return self.control.request(method, target, headers or {}, content)
+        except BarnError:
+            self.control.close()
+            self.control = None
+            raise
 
     def submit_enrolment(
         self,
@@ -137,6 +177,11 @@ class CoordinatorClient:
                 if payload.get("grant_public_key")
                 else None
             ),
+            control_grant=(
+                parse_control_grant(payload["control_grant"])
+                if payload.get("control_grant")
+                else None
+            ),
             decided_at=payload.get("decided_at"),
         )
         if result.status is EnrolmentStatus.APPROVED:
@@ -160,7 +205,9 @@ class CoordinatorClient:
         heartbeat = node.next_heartbeat()
         body = heartbeat.model_dump_json().encode("utf-8")
         target = "/v1/heartbeat"
-        response = self.client.post(
+        response = self._request(
+            node,
+            "POST",
             target,
             content=body,
             headers={
@@ -173,7 +220,9 @@ class CoordinatorClient:
 
     def refresh_registry(self, node: NodeService) -> dict[str, object]:
         target = "/v1/nodes"
-        response = self.client.get(target, headers=self._signed_headers(node, "GET", target, b""))
+        response = self._request(
+            node, "GET", target, headers=self._signed_headers(node, "GET", target, b"")
+        )
         self._raise_for_error(response)
         payload = dict(response.json())
         node.store_registry(payload)
@@ -181,7 +230,8 @@ class CoordinatorClient:
 
     def signed(self, node: NodeService, method: str, target: str, payload: dict | None = None):
         body = json.dumps(payload, separators=(",", ":")).encode() if payload is not None else b""
-        response = self.client.request(
+        response = self._request(
+            node,
             method,
             target,
             content=body,
@@ -192,6 +242,16 @@ class CoordinatorClient:
         )
         self._raise_for_error(response)
         return response.json() if response.content else None
+
+    def refresh_control_grant(self, node: NodeService) -> dict[str, object]:
+        target = "/v1/control/grant"
+        response = self._request(
+            node, "GET", target, headers=self._signed_headers(node, "GET", target, b"")
+        )
+        self._raise_for_error(response)
+        payload = dict(response.json())
+        node.store_control_grant(payload)
+        return payload
 
     def peer_key(self, node: NodeService, peer_id: UUID) -> bytes:
         return decode_binary(

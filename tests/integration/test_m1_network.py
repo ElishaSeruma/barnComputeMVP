@@ -1,6 +1,7 @@
 """Real TLS/WSS transfer acceptance with isolated disposable nodes."""
 
 import hashlib
+import json
 import socket
 import threading
 import time
@@ -11,6 +12,8 @@ import httpx
 import pytest
 import uvicorn
 
+from barn_compute import control_transport
+from barn_compute.control_transport import run_coordinator_control
 from barn_compute.coordinator.admin import create_admin_app
 from barn_compute.coordinator.app import create_public_app
 from barn_compute.coordinator.service import CoordinatorService
@@ -290,3 +293,177 @@ def test_revoked_node_cannot_get_grant_or_identity(network):
         )
     with pytest.raises(BarnError):
         clients[1].signed(nodes[1], "GET", "/v1/shares")
+
+
+def test_isolated_nodes_use_authenticated_control_tunnel(network, tmp_path):
+    coordinator, nodes, clients, _, _, relay = network
+    source, recipient = nodes
+    isolated = NodeService(tmp_path / "IsolatedHeartbeatNode")
+    isolated.initialize("IsolatedHeartbeatNode", "127.0.0.1")
+    metadata = coordinator.load_metadata()
+    isolated.pin_barn_ca(
+        (coordinator.state_dir / "ca-cert.pem").read_bytes(), metadata.ca_fingerprint
+    )
+    invite = coordinator.create_invite(timedelta(minutes=10))
+    challenge = coordinator.create_enrolment_challenge(
+        invite.code, str(isolated.load_metadata().node_id)
+    )
+    receipt = coordinator.submit_enrolment(invite.code, isolated.create_submission(challenge))
+    isolated.record_receipt(receipt.request_id, receipt.receipt)
+    isolated.complete_enrolment(coordinator.approve_enrolment(str(receipt.request_id)))
+
+    stop = threading.Event()
+    control = threading.Thread(
+        target=run_coordinator_control,
+        args=(
+            coordinator,
+            create_public_app(coordinator),
+            relay,
+            coordinator.state_dir / "ca-cert.pem",
+            stop,
+        ),
+        daemon=True,
+    )
+    control.start()
+    with socket.socket() as closed:
+        closed.bind(("127.0.0.1", 0))
+        unavailable = f"https://127.0.0.1:{closed.getsockname()[1]}"
+        source_client = CoordinatorClient(
+            unavailable,
+            source.state_dir / "barn-ca.pem",
+            timeout=0.2,
+            relay_url=relay,
+            relay_ca=coordinator.state_dir / "ca-cert.pem",
+        )
+        recipient_client = CoordinatorClient(
+            unavailable,
+            recipient.state_dir / "barn-ca.pem",
+            timeout=0.2,
+            relay_url=relay,
+            relay_ca=coordinator.state_dir / "ca-cert.pem",
+        )
+        isolated_client = CoordinatorClient(
+            unavailable,
+            isolated.state_dir / "barn-ca.pem",
+            timeout=0.2,
+            relay_url=relay,
+            relay_ca=coordinator.state_dir / "ca-cert.pem",
+        )
+        try:
+            for client, node, operation in (
+                (source_client, source, "shares"),
+                (recipient_client, recipient, "shares"),
+                (isolated_client, isolated, "heartbeat"),
+            ):
+                deadline = time.monotonic() + 60
+                while True:
+                    try:
+                        if operation == "heartbeat":
+                            assert client.send_heartbeat(node)["status"] == "ONLINE"
+                        else:
+                            assert isinstance(client.signed(node, "GET", "/v1/shares"), list)
+                        break
+                    except BarnError:
+                        if time.monotonic() >= deadline:
+                            raise
+                        time.sleep(0.05)
+            registry = isolated_client.refresh_registry(isolated)
+            assert any(
+                item["node_id"] == str(recipient.load_metadata().node_id)
+                for item in registry["nodes"]
+            )
+
+            path = tmp_path / "control-share.bin"
+            path.write_bytes(b"control tunnel authority remains at the coordinator")
+            manifest = source.import_file(path)
+            share_id = share(source_client, source, recipient, manifest)
+            grant = recipient_client.signed(
+                recipient, "POST", f"/v1/shares/{share_id}/grant"
+            )
+            assert grant["file_id"] == str(manifest.file_id)
+            source_client.signed(source, "POST", f"/v1/shares/{share_id}/revoke")
+            with pytest.raises(BarnError):
+                recipient_client.signed(recipient, "POST", f"/v1/shares/{share_id}/grant")
+
+            token = (coordinator.state_dir / "secrets" / "admin.token").read_text().strip()
+            from fastapi.testclient import TestClient
+
+            with TestClient(create_admin_app(coordinator, token)) as admin:
+                assert (
+                    admin.post(
+                        f"/local/v1/nodes/{recipient.load_metadata().node_id}/revoke",
+                        headers={"Authorization": f"Bearer {token}"},
+                    ).status_code
+                    == 204
+                )
+            with pytest.raises(BarnError):
+                recipient_client.signed(recipient, "GET", "/v1/shares")
+        finally:
+            source_client.close()
+            recipient_client.close()
+            isolated_client.close()
+            stop.set()
+            control.join(10)
+            assert not control.is_alive(), "Coordinator control tunnel failed to stop"
+
+
+def test_control_tunnel_distinguishes_outages_and_retries(tmp_path, monkeypatch):
+    coordinator = CoordinatorService(tmp_path / "coordinator")
+    metadata = coordinator.initialize("ControlBarn", "127.0.0.1")
+    node = NodeService(tmp_path / "node")
+    node.initialize("ControlNode", "127.0.0.1")
+    node.pin_barn_ca(
+        (coordinator.state_dir / "ca-cert.pem").read_bytes(), metadata.ca_fingerprint
+    )
+    invite = coordinator.create_invite(timedelta(minutes=10))
+    challenge = coordinator.create_enrolment_challenge(
+        invite.code, str(node.load_metadata().node_id)
+    )
+    receipt = coordinator.submit_enrolment(invite.code, node.create_submission(challenge))
+    node.record_receipt(receipt.request_id, receipt.receipt)
+    node.complete_enrolment(coordinator.approve_enrolment(str(receipt.request_id)))
+
+    class CoordinatorUnavailable:
+        def __init__(self):
+            self.responses = [
+                json.dumps({"type": "challenge", "nonce": "a" * 64}),
+                json.dumps({"type": "unavailable", "reason": "coordinator"}),
+            ]
+
+        def recv(self, timeout=None):
+            return self.responses.pop(0)
+
+        def send(self, _value):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        control_transport, "connect", lambda *_args, **_kwargs: CoordinatorUnavailable()
+    )
+    with pytest.raises(BarnError, match="Coordinator control endpoint is unavailable"):
+        control_transport.ControlConnection("wss://relay.test/v1/tunnel", node)
+
+    def relay_unavailable(*_args, **_kwargs):
+        raise OSError("relay unavailable")
+
+    monkeypatch.setattr(control_transport, "connect", relay_unavailable)
+    with pytest.raises(BarnError, match="Relay control connection failed"):
+        control_transport.ControlConnection("wss://relay.test/v1/tunnel", node)
+
+    attempts = 0
+    stop = threading.Event()
+
+    def reconnect(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("temporary relay outage")
+        stop.set()
+
+    monkeypatch.setattr(control_transport, "_run_coordinator_connection", reconnect)
+    control_transport.run_coordinator_control(
+        coordinator, create_public_app(coordinator), "wss://relay.test/v1/tunnel", None, stop
+    )
+    assert attempts == 2

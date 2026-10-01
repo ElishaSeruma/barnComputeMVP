@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi.testclient import TestClient
 
 from barn_compute.api_models import decode_binary, encode_binary
+from barn_compute.control_transport import parse_control_grant
 from barn_compute.coordinator.admin import create_admin_app
 from barn_compute.coordinator.app import create_public_app
 from barn_compute.coordinator.service import CoordinatorService
@@ -95,9 +96,11 @@ def test_complete_enrolment_through_separate_public_and_admin_apis(tmp_path) -> 
         certificate_pem=decode_binary(result_payload["certificate_pem"]),
         ca_certificate_pem=decode_binary(result_payload["ca_certificate_pem"]),
         grant_public_key=decode_binary(result_payload["grant_public_key"]),
+        control_grant=parse_control_grant(result_payload["control_grant"]),
         decided_at=result_payload["decided_at"],
     )
     assert node.complete_enrolment(result).status is NodeStatus.APPROVED
+    assert (node.state_dir / "control-grant.json").is_file()
 
     peer = TestClient(create_peer_app(node))
     local = TestClient(create_local_app(node, "node-admin-token"))

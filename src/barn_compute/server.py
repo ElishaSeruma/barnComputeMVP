@@ -40,12 +40,15 @@ def serve_coordinator(
     bind: str,
     port: int,
     admin_port: int,
+    relay_url: str | None = None,
+    relay_ca: Path | None = None,
 ) -> None:
     service = CoordinatorService(state_dir)
     service.load_metadata()
     token = (state_dir / "secrets" / "admin.token").read_text(encoding="ascii").strip()
+    public_app = create_public_app(service)
     public = uvicorn.Config(
-        create_public_app(service),
+        public_app,
         host=bind,
         port=port,
         ssl_certfile=str(state_dir / "coordinator-cert.pem"),
@@ -58,7 +61,23 @@ def serve_coordinator(
         port=admin_port,
         log_level="warning",
     )
-    asyncio.run(_serve([public, admin]))
+    stop = threading.Event()
+    control = None
+    if relay_url:
+        from .control_transport import run_coordinator_control
+
+        control = threading.Thread(
+            target=run_coordinator_control,
+            args=(service, public_app, relay_url, relay_ca, stop),
+            daemon=True,
+        )
+        control.start()
+    try:
+        asyncio.run(_serve([public, admin]))
+    finally:
+        stop.set()
+        if control is not None:
+            control.join(timeout=20)
 
 
 def serve_node(
@@ -77,7 +96,12 @@ def serve_node(
     token = (state_dir / "secrets" / "admin.token").read_text(encoding="ascii").strip()
     if coordinator_url is None:
         raise BarnError(ErrorCode.CONFIGURATION, "Node start requires --coordinator for authority")
-    client = CoordinatorClient(coordinator_url, state_dir / "barn-ca.pem")
+    client = CoordinatorClient(
+        coordinator_url,
+        state_dir / "barn-ca.pem",
+        relay_url=relay_url,
+        relay_ca=relay_ca,
+    )
     authority = PeerAuthority(service, client)
     peer = uvicorn.Config(
         create_peer_app(service, authority),
@@ -124,14 +148,29 @@ def run_agent(
     completed = set()
 
     def transfer(ticket: dict) -> None:
-        with CoordinatorClient(coordinator_url, node.state_dir / "barn-ca.pem") as client:
+        with CoordinatorClient(
+            coordinator_url,
+            node.state_dir / "barn-ca.pem",
+            relay_url=relay_url,
+            relay_ca=relay_ca,
+        ) as client:
             connection = RelayConnection(relay_url, node, ticket, ca=relay_ca)
             serve_relay_transfer(connection, PeerAuthority(node, client))
 
     with (
         ThreadPoolExecutor(max_workers=8) as pool,
-        CoordinatorClient(coordinator_url, node.state_dir / "barn-ca.pem") as client,
+        CoordinatorClient(
+            coordinator_url,
+            node.state_dir / "barn-ca.pem",
+            relay_url=relay_url,
+            relay_ca=relay_ca,
+        ) as client,
     ):
+        if relay_url:
+            try:
+                client.refresh_control_grant(node)
+            except Exception:
+                log.warning("Control grant refresh failed; using any retained valid grant")
         heartbeat_at = 0
         import time
 

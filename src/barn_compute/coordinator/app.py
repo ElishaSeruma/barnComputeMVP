@@ -34,6 +34,10 @@ from .service import CoordinatorService
 
 
 def _result_response(result: object) -> ResultResponse:
+    control_grant = None
+    if result.control_grant:
+        control_grant = result.control_grant.model_dump(mode="json", exclude={"signature"})
+        control_grant["signature"] = encode_binary(result.control_grant.signature)
     return ResultResponse(
         request_id=result.request_id,
         status=result.status,
@@ -45,6 +49,7 @@ def _result_response(result: object) -> ResultResponse:
         grant_public_key=(
             encode_binary(result.grant_public_key) if result.grant_public_key else None
         ),
+        control_grant=control_grant,
         decided_at=result.decided_at,
     )
 
@@ -240,6 +245,10 @@ def create_public_app(service: CoordinatorService) -> FastAPI:
             "node_id": str(peer_id),
             "identity_public_key": encode_binary(peer["identity_public_key"]),
         }
+
+    @app.get("/v1/control/grant")
+    async def control_grant(node_id: UUID = Depends(member)) -> dict:
+        return wire(service.issue_control_grant(node_id))
 
     @app.post("/v1/shares/{share_id}/relay-ticket")
     async def relay_ticket(share_id: UUID, node_id: UUID = Depends(member)) -> dict:

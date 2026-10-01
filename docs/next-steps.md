@@ -1,5 +1,56 @@
 # Delivery status and next steps
 
+## Current next steps - 2026-10-01
+
+The integrated M1 runtime exists and `0.1.0a1` was published to TestPyPI.
+Physical Mac/Windows direct transfers, recovery, authorization denials and
+concurrent transfers have recorded passing evidence. M1 is still **NOT ACCEPTED**.
+Use [the canonical report](test-report.md),
+[physical evidence](M1_PHYSICAL_TEST_RESULTS_2026-09-29.md) and
+[closure gates](M1_CLOSURE_AND_GATE.md) for current status.
+
+1. C1 documentation reconciliation and the fresh Windows baseline are complete:
+   Ruff, 82 tests, 82% coverage, build, Twine and existing archive screening pass.
+   See [the dated record](M1_BASELINE_2026-09-30.md). Historical Mac/Windows
+   results remain evidence for their tested revisions; no fresh Mac run is claimed.
+2. C2 is complete on both hosts. [October 1 evidence](M1_C2_PROVENANCE_2026-10-01.md)
+   records fresh TestPyPI installs, retained redacted logs, wheel/content
+   comparisons, `pip check`, versions and local HTTPS coordinator/node smoke checks.
+   Preserve the evidence; no further installation rerun is required for this gate.
+3. Install the unpublished `0.1.0a2` correction candidate on both hosts and
+   complete the C3 retest. The [October 1 physical run](M1_C3_RESOURCE_RESULTS_2026-10-01.md)
+   produced a successful synchronized bidirectional transfer but exposed a
+   retained 100 MiB `assembled.tmp` per transfer. The cleanup fix, 84-test
+   regression run, clean wheel check and candidate hashes are recorded there;
+   repeat the synchronized run with no retained transfer temporary files.
+4. C5 source implementation and local isolation tests are complete; see the
+   [dated control-path record](M1_C5_CONTROL_PATH_2026-10-01.md). Arrange C4's
+   owner-approved public host, DNS and TLS, then run the physical C4/C5 matrix.
+5. Complete C4/C5 physical tests: secure forced relay, direct-to-relay resume,
+   failures, revocation and recovery, then control and data operations with
+   cross-device LAN connectivity blocked and outbound TCP 443 available.
+6. Review actual evidence for every closure gate before marking M1 accepted.
+   Preserve historical records and record later runs in new dated files.
+
+Passed destructive physical tests need not be repeated merely for presentation;
+rerun relevant checks when a changed artifact requires regression evidence.
+The unexplained initial Windows-to-Mac failure remains a known observation.
+
+M2 follows [START_HERE_M2_CODEX.md](START_HERE_M2_CODEX.md) and
+[the M2 specification](M2_1_TO_M2_9_IMPLEMENTATION_SPEC.md): BRG, NBO ledger,
+Bays, encrypted fragments, distribution matrix, Placement NBO, DT-NBO,
+source-independent retrieval, then Resilience NBO. Development can overlap
+external M1 closure testing; TestPyPI release remains gated by inherited M1
+network/security closure and [the release plan](TESTPYPI_0_2_0A1_ACCEPTANCE_PLAN.md).
+Use the [ordered M2 build plan](M2_BUILD_PLAN.md) for implementation slices and
+the [M1 closure workspace](m1-closure/README.md) for explicit gate criteria.
+This documentation slice does not implement M2 or change the runtime.
+
+## Historical delivery checkpoints
+
+Everything below records earlier development stages, including their then-open
+gates. It is preserved for traceability and is not the current work queue.
+
 ## Completed foundation checkpoint
 
 - Package metadata, `src/` layout, and `barn` entry point.

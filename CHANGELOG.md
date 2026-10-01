@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.1.0a1 - Unreleased
+## 0.1.0a2 - Unreleased
+
+- Remove completed-transfer assembly files on success and every export failure.
+- Add coordinator-signed node control grants and an authenticated outbound WSS
+  coordinator control tunnel with end-to-end encrypted RPC payloads.
+- Preserve existing signed requests, nonce replay protection, coordinator
+  authority and live revocation checks across direct and relayed control paths.
+
+## 0.1.0a1 - 2026-09-29 (TestPyPI)
 
 - Integrate member-signed remote shares, recipient proof and current revocation
   checks into direct file delivery without sharing coordinator admin tokens.

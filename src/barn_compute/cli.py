@@ -206,8 +206,17 @@ def coordinator_start(
     port: int = typer.Option(8443, "--port", min=1, max=65535),
     admin_port: int = typer.Option(8754, "--admin-port", min=1, max=65535),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
+    relay_url: str | None = typer.Option(None, "--relay-url"),
+    relay_ca_cert: Path | None = typer.Option(None, "--relay-ca-cert"),
 ) -> None:
-    serve_coordinator(_coordinator_service(state_dir).state_dir, bind, port, admin_port)
+    serve_coordinator(
+        _coordinator_service(state_dir).state_dir,
+        bind,
+        port,
+        admin_port,
+        relay_url or load_config().relay_url,
+        relay_ca_cert,
+    )
 
 
 @node_app.command("init")
@@ -279,9 +288,16 @@ def node_heartbeat(
     coordinator: str = typer.Option(..., "--coordinator"),
     ca_cert: Path = typer.Option(..., "--ca-cert"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
+    relay_url: str | None = typer.Option(None, "--relay-url"),
+    relay_ca_cert: Path | None = typer.Option(None, "--relay-ca-cert"),
 ) -> None:
     node = _node_service(state_dir)
-    with CoordinatorClient(coordinator, ca_cert.expanduser().resolve()) as client:
+    with CoordinatorClient(
+        coordinator,
+        ca_cert.expanduser().resolve(),
+        relay_url=relay_url or load_config().relay_url,
+        relay_ca=relay_ca_cert,
+    ) as client:
         result = client.send_heartbeat(node)
     typer.echo(f"Status: {result['status']}")
 
@@ -291,9 +307,16 @@ def node_registry_refresh(
     coordinator: str = typer.Option(..., "--coordinator"),
     ca_cert: Path = typer.Option(..., "--ca-cert"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
+    relay_url: str | None = typer.Option(None, "--relay-url"),
+    relay_ca_cert: Path | None = typer.Option(None, "--relay-ca-cert"),
 ) -> None:
     node = _node_service(state_dir)
-    with CoordinatorClient(coordinator, ca_cert.expanduser().resolve()) as client:
+    with CoordinatorClient(
+        coordinator,
+        ca_cert.expanduser().resolve(),
+        relay_url=relay_url or load_config().relay_url,
+        relay_ca=relay_ca_cert,
+    ) as client:
         result = client.refresh_registry(node)
     for record in result["nodes"]:
         typer.echo(
@@ -353,6 +376,8 @@ def share_create(
     admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
     coordinator: str | None = typer.Option(None, "--coordinator"),
+    relay_url: str | None = typer.Option(None, "--relay-url"),
+    relay_ca_cert: Path | None = typer.Option(None, "--relay-ca-cert"),
 ) -> None:
     node = _node_service(state_dir)
     metadata = node.load_metadata()
@@ -360,7 +385,12 @@ def share_create(
         raise BarnError(ErrorCode.CONFIGURATION, "Share create requires --coordinator")
     if not any(str(item.file_id) == file_id for item in node.list_files()):
         raise BarnError(ErrorCode.INVALID_REQUEST, "File is not managed by this node")
-    with CoordinatorClient(coordinator, node.state_dir / "barn-ca.pem") as client:
+    with CoordinatorClient(
+        coordinator,
+        node.state_dir / "barn-ca.pem",
+        relay_url=relay_url or load_config().relay_url,
+        relay_ca=relay_ca_cert,
+    ) as client:
         share = client.signed(
             node,
             "POST",
@@ -381,10 +411,17 @@ def share_list(
     admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
     coordinator: str | None = typer.Option(None, "--coordinator"),
+    relay_url: str | None = typer.Option(None, "--relay-url"),
+    relay_ca_cert: Path | None = typer.Option(None, "--relay-ca-cert"),
 ) -> None:
     if coordinator:
         node = _node_service(state_dir)
-        with CoordinatorClient(coordinator, node.state_dir / "barn-ca.pem") as client:
+        with CoordinatorClient(
+            coordinator,
+            node.state_dir / "barn-ca.pem",
+            relay_url=relay_url or load_config().relay_url,
+            relay_ca=relay_ca_cert,
+        ) as client:
             shares = client.signed(node, "GET", "/v1/shares")
     else:
         with _admin_client(state_dir, admin_url) as client:
@@ -402,10 +439,17 @@ def share_revoke(
     admin_url: str = typer.Option("http://127.0.0.1:8754", "--admin-url"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
     coordinator: str | None = typer.Option(None, "--coordinator"),
+    relay_url: str | None = typer.Option(None, "--relay-url"),
+    relay_ca_cert: Path | None = typer.Option(None, "--relay-ca-cert"),
 ) -> None:
     if coordinator:
         node = _node_service(state_dir)
-        with CoordinatorClient(coordinator, node.state_dir / "barn-ca.pem") as client:
+        with CoordinatorClient(
+            coordinator,
+            node.state_dir / "barn-ca.pem",
+            relay_url=relay_url or load_config().relay_url,
+            relay_ca=relay_ca_cert,
+        ) as client:
             client.signed(node, "POST", f"/v1/shares/{UUID(share_id)}/revoke")
     else:
         with _admin_client(state_dir, admin_url) as client:
@@ -434,7 +478,12 @@ def share_fetch(
     relay_url = relay_url or config.relay_url
     if mode not in ("direct", "auto", "relay") or (mode == "relay" and not relay_url):
         raise BarnError(ErrorCode.CONFIGURATION, "Invalid or unconfigured transport mode")
-    with CoordinatorClient(coordinator, node.state_dir / "barn-ca.pem") as client:
+    with CoordinatorClient(
+        coordinator,
+        node.state_dir / "barn-ca.pem",
+        relay_url=relay_url,
+        relay_ca=relay_ca_cert,
+    ) as client:
         grant = client.signed(node, "POST", f"/v1/shares/{UUID(share_id)}/grant")
         try:
             if mode == "relay":
@@ -485,9 +534,16 @@ def node_status(state_dir: Path | None = typer.Option(None, "--state-dir")) -> N
 def share_inbox(
     coordinator: str = typer.Option(..., "--coordinator"),
     state_dir: Path | None = typer.Option(None, "--state-dir"),
+    relay_url: str | None = typer.Option(None, "--relay-url"),
+    relay_ca_cert: Path | None = typer.Option(None, "--relay-ca-cert"),
 ) -> None:
     node = _node_service(state_dir)
-    with CoordinatorClient(coordinator, node.state_dir / "barn-ca.pem") as client:
+    with CoordinatorClient(
+        coordinator,
+        node.state_dir / "barn-ca.pem",
+        relay_url=relay_url or load_config().relay_url,
+        relay_ca=relay_ca_cert,
+    ) as client:
         for share in client.signed(node, "GET", "/v1/shares"):
             typer.echo(json.dumps(share, sort_keys=True))
 

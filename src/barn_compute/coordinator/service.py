@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.x509.oid import NameOID
 from pydantic import BaseModel, ConfigDict
 
+from ..api_models import encode_binary
 from ..auth import NonceStore, SignedRequest, verify_request
 from ..config import ensure_private_directory, write_private_bytes, write_private_json
 from ..crypto import (
@@ -37,9 +38,10 @@ from ..crypto import (
     save_private_identity,
 )
 from ..errors import BarnError, ErrorCode
-from ..grants import canonical_relay_ticket, canonical_transfer_grant
+from ..grants import canonical_control_grant, canonical_relay_ticket, canonical_transfer_grant
 from ..models import (
     PROTOCOL_VERSION,
+    ControlGrant,
     EnrolmentChallenge,
     EnrolmentReceipt,
     EnrolmentResult,
@@ -728,8 +730,45 @@ class CoordinatorService:
             signature=signature,
         )
 
-    @staticmethod
-    def _result_from_row(request: sqlite3.Row, metadata: CoordinatorMetadata) -> EnrolmentResult:
+    def issue_control_grant(
+        self,
+        node_id: UUID,
+        *,
+        ttl: timedelta = timedelta(days=30),
+        now: datetime | None = None,
+    ) -> ControlGrant:
+        metadata = self.load_metadata()
+        issued_at = now or datetime.now(UTC)
+        with CoordinatorRepository(self.database_path) as repository:
+            node = repository.get_node(str(node_id))
+        if node is None or node["status"] == NodeStatus.REVOKED:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Node is not an active Barn member")
+        expires_at = issued_at + ttl
+        grant_id = uuid4()
+        identity_key = encode_binary(node["identity_public_key"])
+        signature = load_private_identity(self.state_dir / "secrets" / "grant-key.pem").sign(
+            canonical_control_grant(
+                grant_id,
+                metadata.barn_id,
+                node_id,
+                identity_key,
+                issued_at,
+                expires_at,
+            )
+        )
+        return ControlGrant(
+            grant_id=grant_id,
+            barn_id=metadata.barn_id,
+            node_id=node_id,
+            node_identity_key=identity_key,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            signature=signature,
+        )
+
+    def _result_from_row(
+        self, request: sqlite3.Row, metadata: CoordinatorMetadata
+    ) -> EnrolmentResult:
         status = EnrolmentStatus(request["status"])
         approved = status is EnrolmentStatus.APPROVED
         return EnrolmentResult(
@@ -739,5 +778,8 @@ class CoordinatorService:
             certificate_pem=request["certificate_pem"] if approved else None,
             ca_certificate_pem=request["ca_certificate_pem"] if approved else None,
             grant_public_key=request["grant_public_key"] if approved else None,
+            control_grant=(
+                self.issue_control_grant(UUID(request["node_id"])) if approved else None
+            ),
             decided_at=_utc(request["decided_at"]) if request["decided_at"] else None,
         )

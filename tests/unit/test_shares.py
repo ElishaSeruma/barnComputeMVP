@@ -201,9 +201,12 @@ def test_recipient_journal_resumes_and_exports_without_clobbering(tmp_path) -> N
     recipient.accept_transfer_chunk(grant, manifest, 1, b"final")
     destination = recipient.export_transfer(grant, manifest, tmp_path / "exported.bin")
     assert destination.read_bytes() == source_file.read_bytes()
+    transfer_dir = recipient.state_dir / "transfers" / str(grant.transfer_id)
+    assert not (transfer_dir / "assembled.tmp").exists()
     with pytest.raises(BarnError) as error:
         recipient.export_transfer(grant, manifest, destination)
     assert error.value.code is ErrorCode.CONFIGURATION
+    assert not (transfer_dir / "assembled.tmp").exists()
 
 
 def test_admin_share_surface_requires_bearer_and_issues_grant(tmp_path) -> None:
@@ -397,6 +400,9 @@ def test_export_does_not_overwrite_concurrently_created_destination(tmp_path, mo
     with pytest.raises(BarnError):
         recipient.export_transfer(grant, manifest, destination)
     assert destination.read_bytes() == b"keep me"
+    transfer_dir = recipient.state_dir / "transfers" / str(grant.transfer_id)
+    assert not (transfer_dir / "assembled.tmp").exists()
+    assert not (tmp_path / f".race.bin.{grant.transfer_id}.tmp").exists()
 
 
 def test_relay_rejects_routing_outside_ticket_and_duplicate_connections(tmp_path):

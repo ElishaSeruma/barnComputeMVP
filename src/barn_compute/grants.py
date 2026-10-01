@@ -53,3 +53,23 @@ def canonical_relay_ticket(
         "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def canonical_control_grant(
+    grant_id: UUID,
+    barn_id: UUID,
+    node_id: UUID,
+    node_identity_key: str,
+    issued_at: datetime,
+    expires_at: datetime,
+) -> bytes:
+    payload = {
+        "domain": "barn-control-grant-v1",
+        "grant_id": str(grant_id),
+        "barn_id": str(barn_id),
+        "node_id": str(node_id),
+        "node_identity_key": node_identity_key,
+        "issued_at": issued_at.isoformat().replace("+00:00", "Z"),
+        "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

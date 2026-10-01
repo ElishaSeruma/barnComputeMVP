@@ -39,6 +39,7 @@ from ..models import (
     MAX_FILE_SIZE,
     PROTOCOL_VERSION,
     ChunkManifest,
+    ControlGrant,
     EnrolmentChallenge,
     EnrolmentResult,
     EnrolmentStatus,
@@ -310,8 +311,45 @@ class NodeService:
             update={"status": NodeStatus.APPROVED, "barn_id": result.barn_id}
         )
         write_private_json(self.metadata_path, approved.model_dump(mode="json"))
+        if result.control_grant is not None:
+            from ..api_models import encode_binary
+
+            payload = result.control_grant.model_dump(mode="json", exclude={"signature"})
+            payload["signature"] = encode_binary(result.control_grant.signature)
+            self.store_control_grant(payload)
         (self.state_dir / "secrets" / "enrolment-receipt.token").unlink(missing_ok=True)
         return approved
+
+    def store_control_grant(self, payload: dict[str, object]) -> ControlGrant:
+        from ..api_models import decode_binary, encode_binary
+        from ..grants import canonical_control_grant
+
+        value = dict(payload)
+        value["signature"] = decode_binary(str(value["signature"]))
+        grant = ControlGrant.model_validate(value)
+        metadata = self.load_metadata()
+        if grant.barn_id != metadata.barn_id or grant.node_id != metadata.node_id:
+            raise BarnError(ErrorCode.NOT_AUTHORISED, "Control grant scope is invalid")
+        identity = public_key_bytes(
+            load_private_identity(self.state_dir / "secrets" / "identity-key.pem").public_key()
+        )
+        if decode_binary(grant.node_identity_key) != identity:
+            raise BarnError(ErrorCode.NOT_AUTHENTICATED, "Control grant identity is invalid")
+        load_public_key((self.state_dir / "grant-public.key").read_bytes()).verify(
+            grant.signature,
+            canonical_control_grant(
+                grant.grant_id,
+                grant.barn_id,
+                grant.node_id,
+                grant.node_identity_key,
+                grant.issued_at,
+                grant.expires_at,
+            ),
+        )
+        stored = grant.model_dump(mode="json", exclude={"signature"})
+        stored["signature"] = encode_binary(grant.signature)
+        write_private_json(self.state_dir / "control-grant.json", stored)
+        return grant
 
     def next_heartbeat(self) -> Heartbeat:
         metadata = self.load_metadata()
@@ -591,32 +629,35 @@ class NodeService:
     def export_transfer(
         self, grant: TransferGrant, manifest: FileManifest, destination: Path
     ) -> Path:
-        assembled = self.assemble_transfer(grant, manifest)
         destination = destination.expanduser().absolute()
         if destination.exists() or destination.is_symlink():
             raise BarnError(ErrorCode.CONFIGURATION, "Destination already exists")
-        journal = self.start_transfer(grant, manifest, revalidate=False)
-        journal_path = self.confined("transfers", str(grant.transfer_id), "journal.json")
-        if journal.managed_file_id is None:
-            received = self.import_file(assembled, display_name=manifest.display_name)
-            journal = journal.model_copy(update={"managed_file_id": received.file_id})
-            write_private_json(journal_path, journal.model_dump(mode="json"))
+        assembled = self.assemble_transfer(grant, manifest)
         try:
-            ensure_private_directory(destination.parent)
+            journal = self.start_transfer(grant, manifest, revalidate=False)
+            journal_path = self.confined("transfers", str(grant.transfer_id), "journal.json")
+            if journal.managed_file_id is None:
+                received = self.import_file(assembled, display_name=manifest.display_name)
+                journal = journal.model_copy(update={"managed_file_id": received.file_id})
+                write_private_json(journal_path, journal.model_dump(mode="json"))
             temporary = destination.with_name(f".{destination.name}.{grant.transfer_id}.tmp")
-            with assembled.open("rb") as source, temporary.open("xb") as output:
-                shutil.copyfileobj(source, output, CHUNK_SIZE)
-                output.flush()
-                os.fsync(output.fileno())
-            # Atomic no-clobber publication, including a concurrent destination creation.
-            os.link(temporary, destination)
-            temporary.unlink()
-        except OSError as exc:
-            temporary.unlink(missing_ok=True)
-            raise BarnError(ErrorCode.CONFIGURATION, "Transfer export failed") from exc
-        journal = journal.model_copy(update={"exported": True})
-        write_private_json(journal_path, journal.model_dump(mode="json"))
-        return destination
+            try:
+                ensure_private_directory(destination.parent)
+                with assembled.open("rb") as source, temporary.open("xb") as output:
+                    shutil.copyfileobj(source, output, CHUNK_SIZE)
+                    output.flush()
+                    os.fsync(output.fileno())
+                # Atomic no-clobber publication, including a concurrent destination creation.
+                os.link(temporary, destination)
+                temporary.unlink()
+            except OSError as exc:
+                temporary.unlink(missing_ok=True)
+                raise BarnError(ErrorCode.CONFIGURATION, "Transfer export failed") from exc
+            journal = journal.model_copy(update={"exported": True})
+            write_private_json(journal_path, journal.model_dump(mode="json"))
+            return destination
+        finally:
+            assembled.unlink(missing_ok=True)
 
     def grant_manifest(self, grant: TransferGrant) -> FileManifest:
         self._verify_transfer_grant(grant)
